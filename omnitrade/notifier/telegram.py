@@ -36,3 +36,8 @@ class TelegramNotifier:
             f"Fiyat: {price:.4f}  Miktar: {qty:.6f}\n"
             f"Sebep: {reason}"
         )
+
+    def system_alert(self, text: str) -> None:
+        """Operasyonel uyarılar (hata, restart, healthcheck) için — trade
+        sinyalleriyle karışmasın diye ayrı bir prefix kullanır."""
+        self.send(f"⚙️ SYSTEM: {text}")

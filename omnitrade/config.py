@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from omnitrade.risk import RiskConfig
+
 
 def _load_dotenv(path: Path) -> None:
     """Minimal .env loader — python-dotenv'e bağımlı olmamak için."""
@@ -46,11 +48,19 @@ class Config:
     timeframe: str = "1h"
     pairs: list = field(default_factory=lambda: ["BTC/USDT"])
     strategy: str = "RsiStrategy"
+    strategy_params: dict = field(default_factory=dict)
     poll_interval_seconds: int = 60
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    risk: RiskConfig = field(default_factory=RiskConfig)
+    fee_pct: float = 0.001
+    slippage_pct: float = 0.0005
     db_path: str = "data/omnitrade.db"
     web_port: int = 8080
+    # Canlı emirler (dry_run: false) için ek bir bilinçli onay bayrağı.
+    # engine.py bunu kontrol eder — sadece dry_run:false yetmez, bkz. README
+    # "Canlıya geçmeden önce" bölümü.
+    live_trading_confirmed: bool = False
 
 
 def load_config(config_path: str = "config/config.yaml", env_path: str = ".env") -> Config:
@@ -63,6 +73,7 @@ def load_config(config_path: str = "config/config.yaml", env_path: str = ".env")
 
     exchange_raw = raw.get("exchange", {})
     telegram_raw = raw.get("telegram", {})
+    risk_raw = raw.get("risk", {})
 
     cfg = Config(
         dry_run=raw.get("dry_run", True),
@@ -71,9 +82,13 @@ def load_config(config_path: str = "config/config.yaml", env_path: str = ".env")
         timeframe=raw.get("timeframe", "1h"),
         pairs=raw.get("pairs", ["BTC/USDT"]),
         strategy=raw.get("strategy", "RsiStrategy"),
+        strategy_params=raw.get("strategy_params", {}) or {},
         poll_interval_seconds=int(raw.get("poll_interval_seconds", 60)),
         db_path=raw.get("db_path", "data/omnitrade.db"),
         web_port=int(raw.get("web_port", 8080)),
+        fee_pct=float(raw.get("fee_pct", 0.001)),
+        slippage_pct=float(raw.get("slippage_pct", 0.0005)),
+        live_trading_confirmed=bool(raw.get("live_trading_confirmed", False)),
         exchange=ExchangeConfig(
             name=exchange_raw.get("name", "binance"),
             api_key=os.environ.get("EXCHANGE_KEY", exchange_raw.get("api_key", "")),
@@ -83,6 +98,15 @@ def load_config(config_path: str = "config/config.yaml", env_path: str = ".env")
             enabled=telegram_raw.get("enabled", False),
             token=os.environ.get("TELEGRAM_TOKEN", telegram_raw.get("token", "")),
             chat_id=os.environ.get("TELEGRAM_CHAT_ID", telegram_raw.get("chat_id", "")),
+        ),
+        risk=RiskConfig(
+            max_position_pct=float(risk_raw.get("max_position_pct", 0.2)),
+            max_open_positions=int(risk_raw.get("max_open_positions", 5)),
+            stop_loss_pct=float(risk_raw.get("stop_loss_pct", 0.05)),
+            take_profit_pct=(
+                float(risk_raw["take_profit_pct"]) if risk_raw.get("take_profit_pct") else None
+            ),
+            max_daily_loss_pct=float(risk_raw.get("max_daily_loss_pct", 0.1)),
         ),
     )
     return cfg

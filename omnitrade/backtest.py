@@ -44,7 +44,12 @@ class BacktestResult:
 def run_backtest(
     df: pd.DataFrame, strategy: Strategy, symbol: str,
     starting_balance: float = 1000.0, stake_fraction: float = 0.2, fee_pct: float = 0.001,
+    slippage_pct: float = 0.0005,
 ) -> BacktestResult:
+    """`slippage_pct`: gerçek dünyada emrin, gördüğün fiyattan biraz daha
+    kötü dolması (alışta daha pahalı, satışta daha ucuz). Bu modellenmezse
+    backtest sonuçları gerçekte elde edeceğinden daha iyimser çıkar —
+    özellikle çok işlem yapan/düşük likiditeli stratejilerde önemli."""
     balance = starting_balance
     qty = 0.0
     entry_price = 0.0
@@ -59,16 +64,18 @@ def run_backtest(
         signal = strategy.generate_signal(window, symbol)
 
         if signal.action == Action.BUY and qty == 0:
+            fill_price = price * (1 + slippage_pct)
             stake = balance * stake_fraction
-            qty = (stake * (1 - fee_pct)) / price
+            qty = (stake * (1 - fee_pct)) / fill_price
             balance -= stake
-            entry_price = price
+            entry_price = fill_price
             trades += 1
 
         elif signal.action == Action.SELL and qty > 0:
-            proceeds = qty * price * (1 - fee_pct)
+            fill_price = price * (1 - slippage_pct)
+            proceeds = qty * fill_price * (1 - fee_pct)
             balance += proceeds
-            if price > entry_price:
+            if fill_price > entry_price:
                 wins += 1
             qty = 0.0
 
@@ -76,7 +83,8 @@ def run_backtest(
 
     # Backtest sonunda açık pozisyon varsa son fiyattan kapat (raporlama için)
     if qty > 0:
-        balance += qty * float(df["close"].iloc[-1]) * (1 - fee_pct)
+        exit_price = float(df["close"].iloc[-1]) * (1 - slippage_pct)
+        balance += qty * exit_price * (1 - fee_pct)
         qty = 0.0
 
     peak = equity_curve[0]

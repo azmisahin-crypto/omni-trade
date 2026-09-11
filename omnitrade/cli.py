@@ -25,9 +25,16 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     from omnitrade.strategies import get_strategy
 
     config = load_config(args.config)
-    strategy = get_strategy(args.strategy or config.strategy)
+    strategy_name = args.strategy or config.strategy
+    # --strategy ile config'te olmayan bir strateji seçilirse parametreler
+    # boş kalır (strateji kendi defaultlarını kullanır).
+    params = config.strategy_params if strategy_name == config.strategy else None
+    strategy = get_strategy(strategy_name, params)
     df = load_csv(args.csv)
-    result = run_backtest(df, strategy, args.symbol, starting_balance=args.balance)
+    result = run_backtest(
+        df, strategy, args.symbol, starting_balance=args.balance,
+        fee_pct=config.fee_pct, slippage_pct=config.slippage_pct,
+    )
     print(result)
 
 

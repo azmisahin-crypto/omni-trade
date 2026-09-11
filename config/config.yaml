@@ -13,6 +13,26 @@ pairs:
   - ETH/USDT
 
 strategy: RsiStrategy      # omnitrade/strategies/__init__.py -> STRATEGIES içinde kayıtlı olmalı
+strategy_params:           # RsiStrategy.__init__ parametreleriyle birebir eşleşir
+  period: 14
+  oversold: 30
+  overbought: 70
+
+# İşlem maliyeti modeli — hem backtest hem dry-run bu değerleri kullanır,
+# böylece iki ortamın sonuçları karşılaştırılabilir kalır.
+fee_pct: 0.001            # borsa komisyonu (0.001 = %0.1, Binance spot varsayılanı)
+slippage_pct: 0.0005      # emrin gördüğün fiyattan ne kadar kötü dolacağı tahmini
+
+risk:
+  max_position_pct: 0.2       # bakiyenin en fazla %20'si tek pozisyona
+  max_open_positions: 5       # aynı anda en fazla kaç pozisyon açık olabilir
+  stop_loss_pct: 0.05         # pozisyon %5 zarardaysa zorla kapat
+  take_profit_pct:             # boş bırakılırsa kapalı, örn: 0.10 = %10 kârda sat
+  max_daily_loss_pct: 0.1     # günlük equity %10 azaldıysa o gün yeni pozisyon açma (kill-switch)
+
+# Gerçek para ile işlem yapmak için dry_run:false YETMEZ — ayrıca bu bayrağı
+# da açıkça true yapman gerekir. Bkz. README "Canlıya geçmeden önce".
+live_trading_confirmed: false
 
 db_path: data/omnitrade.db
 web_port: 8080
