@@ -1,4 +1,16 @@
 
+# e2-micro (1 vCPU, 1GB RAM) gibi küçük VM'lerde çalıştırmak için mem_limit
+# ve log rotasyonu ekli — bkz. CHANGELOG.md Faz 2. mem_limit aşılırsa
+# container OOM-killed olur ve `restart: unless-stopped` sayesinde yeniden
+# başlar; sınırsız log büyümesi ise diskin dolup makinenin kilitlenmesine
+# yol açabileceği için ayrıca sınırlanıyor.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   bot:
     build: .
@@ -8,6 +20,8 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    mem_limit: 300m
+    logging: *default-logging
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -20,6 +34,8 @@ services:
     env_file: .env
     ports:
       - "127.0.0.1:8080:8080"   # SSH tünelle veya reverse proxy ile dışarı aç
+    mem_limit: 150m
+    logging: *default-logging
     volumes:
       - ./data:/app/data
       - ./config:/app/config

@@ -168,19 +168,40 @@ kod yolu.
 
 ## Sıradaki fazlar (henüz uygulanmadı)
 
-### Faz 2 — Operasyonel dayanıklılık (e2-micro'ya özel)
-- [ ] `docker-compose.yml`'e `mem_limit` (örn. bot: 300m, web: 150m) ve
-      `logging.driver: json-file` + `max-size`/`max-file` ekle (disk
-      dolmasın diye).
-- [ ] `scripts/setup_swap.sh`: 2GB swap oluşturma script'i.
-- [ ] `scripts/healthcheck.py`: `Storage.last_heartbeat()`'i okuyup
-      `poll_interval_seconds`'in birkaç katından eskiyse
-      `notifier.system_alert()` ile Telegram'a haber verip container'ı
-      restart eden basit bir script. Cron ile 5 dakikada bir çalıştırılabilir.
-- [ ] `deploy.sh`: `git pull && docker compose up -d --build` — tek
-      komutla deploy.
-- [ ] README'ye e2-micro deployment bölümü ekle (SSH tünel ile dashboard
-      erişimi, firewall kuralları, swap kurulumu sırası).
+## Faz 2 — Operasyonel dayanıklılık (e2-micro'ya özel) ✅ Tamamlandı
+
+**Neden:** Bot, e2-micro (1 vCPU/1GB RAM) gibi minik bir VM'de 7/24
+çalışacak — bellek/disk sınırları aşılırsa ya sessizce çökebilir ya da
+tüm VM'i kilitleyebilir, ve çöktüğünde kimse fark etmeyebilir (Telegram
+alert'i olmayan bir kod yolu yok).
+
+**Değişenler:**
+
+- **`docker-compose.yml`** — `bot` için `mem_limit: 300m`, `web` için
+  `mem_limit: 150m` (aşılırsa OOM-killed olur, `restart: unless-stopped`
+  ile geri döner). Ortak `x-logging` anchor'ı ile `json-file` + `max-size:
+  10m` / `max-file: 3` — sınırsız log diski doldurmasın diye.
+- **`scripts/setup_swap.sh` (yeni)** — 2GB swap dosyası oluşturur,
+  `/etc/fstab`'a ekleyip kalıcı yapar, `vm.swappiness=10` ayarlar (swap'ı
+  sadece gerçekten gerektiğinde kullansın).
+- **`scripts/healthcheck.py` (yeni)** — `Storage.last_heartbeat()`'i
+  okur; `poll_interval_seconds`'in 5 katından (varsayılan, `--stale-
+  multiplier` ile değiştirilebilir) daha eskiyse `notifier.system_alert()`
+  ile Telegram'a haber verip `docker restart omnitrade-bot` çalıştırır.
+  Host'ta (container İÇİNDE DEĞİL) cron ile 5 dakikada bir çalıştırılmak
+  üzere tasarlandı — container kendi kendini restart edemeyeceği için.
+  4 test (`tests/test_healthcheck.py`): taze heartbeat'te restart
+  tetiklenmiyor, eski heartbeat'te tetikleniyor, restart başarısız olursa
+  exit code 1 + alert, hiç heartbeat yokken (ilk kurulum) hata verilmiyor.
+- **`deploy.sh` (yeni)** — `git pull --ff-only && docker compose up -d
+  --build`, ardından son logları ve container durumunu gösterir.
+- **README** — yeni "GCP e2-micro üzerinde çalıştırma" bölümü: swap
+  kurulumu, firewall (8080 asla dışarı açılmamalı — zaten `127.0.0.1`'e
+  bağlı), SSH tüneli ile dashboard erişimi, deploy ve healthcheck cron
+  kurulumu adım adım.
+- **Toplam: 43 → 47 test.**
+
+---
 
 ### Faz 3 — İzlenebilirlik
 - [ ] Dashboard'a (`web/static/`) drawdown grafiği ve basit özet istatistik

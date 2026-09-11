@@ -87,6 +87,41 @@ docker compose up -d --build
 
 `bot` servisi döngüyü, `web` servisi dashboard'u ayrı container'larda
 çalıştırır, ikisi de `data/` klasöründeki aynı SQLite dosyasını paylaşır.
+Her iki servis de küçük VM'lerde (bkz. aşağıdaki e2-micro bölümü) OOM'u
+önlemek için `mem_limit`e sahip, loglar da diski doldurmasın diye
+döndürülüyor (`max-size: 10m`, `max-file: 3`).
+
+### GCP e2-micro (1 vCPU, 1GB RAM) üzerinde çalıştırma
+
+1. **Swap kur** (Docker + Python botu 1GB RAM'de dar olabilir):
+   ```bash
+   sudo bash scripts/setup_swap.sh   # 2GB swap dosyası, kalıcı (fstab)
+   ```
+2. **Firewall**: `8080` portunu dışarı hiç açma — `docker-compose.yml`
+   dashboard'u zaten sadece `127.0.0.1:8080`'e bağlıyor. GCP'de VPC
+   firewall kuralında da yalnızca SSH (22) inbound açık olsun, 8080'i
+   hiç eklemene gerek yok.
+3. **Dashboard'a erişim**: SSH tüneli ile local makinenden bağlan, VM'de
+   port dışarı açmadan:
+   ```bash
+   ssh -L 8080:localhost:8080 kullanici@vm-ip
+   # sonra local tarayıcıda http://localhost:8080
+   ```
+4. **Deploy**:
+   ```bash
+   git clone <repo-url> && cd omni-trade
+   cp .env.example .env   # token/anahtarları doldur
+   bash deploy.sh          # git pull + docker compose up -d --build
+   ```
+   Sonraki güncellemelerde de sadece `bash deploy.sh` yeterli.
+5. **Healthcheck (opsiyonel ama önerilir)**: bot çökerse/takılırsa
+   Telegram'a haber verip container'ı otomatik restart eder — host'ta
+   (container içinde değil) cron'a ekle:
+   ```bash
+   crontab -e
+   # aşağıdaki satırı ekle:
+   */5 * * * * cd /path/to/omni-trade && python3 scripts/healthcheck.py >> data/healthcheck.log 2>&1
+   ```
 
 ## Yeni strateji ekleme
 
@@ -120,9 +155,11 @@ docker compose up -d --build
 python -m unittest discover -s tests -v
 ```
 
-29 test şu an hazır (strateji sinyalleri, risk yönetimi, portföy al/sat
-mantığı + komisyon/slippage, backtest uçtan uca ve farklı piyasa rejimleri)
-— hepsi ağdan bağımsız, saniyeler içinde çalışır.
+47 test şu an hazır (strateji sinyalleri, risk yönetimi, portföy al/sat
+mantığı + komisyon/slippage, backtest uçtan uca + risk entegrasyonu, config
+yükleme, canlı-emir güvenlik freni, healthcheck script'i) — hepsi ağdan
+bağımsız, saniyeler içinde çalışır. CI'da (`.github/workflows/tests.yml`)
+her push/PR'da otomatik çalışır.
 
 ## Geliştirme geçmişi
 
