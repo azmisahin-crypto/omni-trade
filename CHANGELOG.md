@@ -139,16 +139,34 @@ backtest'te hiç tetiklenmiyordu).
 
 ---
 
-## Sıradaki fazlar (henüz uygulanmadı)
+## Faz 1 — kalan işler ✅ Tamamlandı
 
-### Faz 1 — kalan işler
-- [ ] `tests/test_config.py`: yeni config alanlarının (risk, fee_pct,
-      strategy_params, live_trading_confirmed) doğru yüklendiğini test et.
-- [ ] `tests/test_engine.py`: `_live_order_qty`'nin `live_trading_confirmed`
-      false/true durumlarında doğru davrandığını test et.
-- [ ] `.github/workflows/tests.yml`: her push/PR'da `python -m unittest
-      discover -s tests` otomatik çalışsın. `ccxt` gerekmediği için CI
-      hızlı olur.
+**Neden:** Faz 1'in ilk turunda strateji/portföy/backtest test kapsamı
+genişletilmişti ama config yükleme ve canlı-emir güvenlik freni hiç test
+edilmiyordu — ikincisi özellikle riskli, çünkü gerçek para hareket eden
+kod yolu.
+
+**Değişenler:**
+
+- **`tests/test_config.py` (yeni)** — 7 test: config dosyası yokken
+  varsayılanlar, `risk` bölümünün doğru parse edilmesi, `take_profit_pct`
+  boş bırakıldığında `None` olması, `fee_pct`/`slippage_pct`/
+  `strategy_params`, `live_trading_confirmed`, `.env`'deki sırların
+  `config.yaml`'dakini override etmesi, `pairs` listesi.
+- **`tests/test_engine.py` (yeni)** — 4 test: `_live_order_qty`
+  `live_trading_confirmed: false` iken `NotImplementedError` fırlatıyor mu,
+  `true` iken `RiskManager` üzerinden doğru miktarı hesaplıyor mu,
+  `_apply_live_signal` onay yokken **borsaya emir göndermiyor mu**
+  (`create_market_order` hiç çağrılmamalı — yanlışlıkla canlı emir gitme
+  riskine karşı en kritik test), onaylıyken doğru çağrılıyor mu.
+- **`.github/workflows/tests.yml` (yeni)** — her push/PR'da Python 3.11 ve
+  3.12'de `python -m unittest discover -s tests` çalışır. `ccxt` bilerek
+  kurulmuyor (README'deki "ağdan bağımsız" iddiası CI'da da doğrulanmış olur).
+- **Toplam: 32 → 43 test.**
+
+---
+
+## Sıradaki fazlar (henüz uygulanmadı)
 
 ### Faz 2 — Operasyonel dayanıklılık (e2-micro'ya özel)
 - [ ] `docker-compose.yml`'e `mem_limit` (örn. bot: 300m, web: 150m) ve

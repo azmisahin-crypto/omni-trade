@@ -1,0 +1,123 @@
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from omnitrade.config import load_config
+
+
+class TestLoadConfig(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmp = Path(self._tmpdir.name)
+
+    def _write(self, name: str, content: str) -> str:
+        path = self.tmp / name
+        path.write_text(content)
+        return str(path)
+
+    def test_defaults_when_config_file_missing(self):
+        cfg = load_config(
+            config_path=str(self.tmp / "does_not_exist.yaml"),
+            env_path=str(self.tmp / "does_not_exist.env"),
+        )
+        self.assertTrue(cfg.dry_run)
+        self.assertEqual(cfg.dry_run_wallet, 1000.0)
+        self.assertEqual(cfg.strategy, "RsiStrategy")
+        self.assertEqual(cfg.pairs, ["BTC/USDT"])
+        self.assertFalse(cfg.live_trading_confirmed)
+
+    def test_risk_section_is_parsed(self):
+        config_path = self._write(
+            "config.yaml",
+            """
+risk:
+  max_position_pct: 0.1
+  max_open_positions: 3
+  stop_loss_pct: 0.02
+  take_profit_pct: 0.08
+  max_daily_loss_pct: 0.05
+""",
+        )
+        cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.risk.max_position_pct, 0.1)
+        self.assertEqual(cfg.risk.max_open_positions, 3)
+        self.assertEqual(cfg.risk.stop_loss_pct, 0.02)
+        self.assertEqual(cfg.risk.take_profit_pct, 0.08)
+        self.assertEqual(cfg.risk.max_daily_loss_pct, 0.05)
+
+    def test_take_profit_pct_none_when_blank(self):
+        config_path = self._write(
+            "config.yaml",
+            """
+risk:
+  take_profit_pct:
+""",
+        )
+        cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
+        self.assertIsNone(cfg.risk.take_profit_pct)
+
+    def test_fee_and_slippage_and_strategy_params_are_parsed(self):
+        config_path = self._write(
+            "config.yaml",
+            """
+fee_pct: 0.002
+slippage_pct: 0.001
+strategy: RsiStrategy
+strategy_params:
+  period: 21
+  oversold: 25
+  overbought: 75
+""",
+        )
+        cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.fee_pct, 0.002)
+        self.assertEqual(cfg.slippage_pct, 0.001)
+        self.assertEqual(cfg.strategy_params, {"period": 21, "oversold": 25, "overbought": 75})
+
+    def test_live_trading_confirmed_defaults_false_and_can_be_enabled(self):
+        config_path = self._write("config.yaml", "live_trading_confirmed: true\n")
+        cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
+        self.assertTrue(cfg.live_trading_confirmed)
+
+    def test_env_overrides_take_precedence_over_yaml_secrets(self):
+        # Sırlar (token/api key) .env'den okunur, config.yaml'da olsa bile
+        # .env'deki değer öncelikli olmalı (config.py'nin belgelenen davranışı).
+        config_path = self._write(
+            "config.yaml",
+            """
+telegram:
+  enabled: true
+  token: yaml-token
+  chat_id: yaml-chat
+exchange:
+  name: binance
+  api_key: yaml-key
+  api_secret: yaml-secret
+""",
+        )
+        env_path = self._write(
+            ".env",
+            "TELEGRAM_TOKEN=env-token\nTELEGRAM_CHAT_ID=env-chat\n"
+            "EXCHANGE_KEY=env-key\nEXCHANGE_SECRET=env-secret\n",
+        )
+        for var in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "EXCHANGE_KEY", "EXCHANGE_SECRET"):
+            os.environ.pop(var, None)
+        self.addCleanup(lambda: [os.environ.pop(v, None) for v in (
+            "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "EXCHANGE_KEY", "EXCHANGE_SECRET")])
+
+        cfg = load_config(config_path=config_path, env_path=env_path)
+        self.assertEqual(cfg.telegram.token, "env-token")
+        self.assertEqual(cfg.telegram.chat_id, "env-chat")
+        self.assertEqual(cfg.exchange.api_key, "env-key")
+        self.assertEqual(cfg.exchange.api_secret, "env-secret")
+
+    def test_pairs_list_is_parsed(self):
+        config_path = self._write("config.yaml", "pairs:\n  - BTC/USDT\n  - ETH/USDT\n")
+        cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.pairs, ["BTC/USDT", "ETH/USDT"])
+
+
+if __name__ == "__main__":
+    unittest.main()
