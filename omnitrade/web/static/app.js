@@ -5,6 +5,7 @@ async function fetchJSON(url) {
 
 let equityChart, drawdownChart, signalChart;
 let selectedSymbol = null;
+let signalChartSymbol = null; // hangi coin şu an signalChart'ta çizili — gereksiz destroy/recreate'i önlemek için
 
 function timeAgo(ts) {
   const diffSec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -123,6 +124,19 @@ async function selectSymbol(symbol) {
   const buyPoints = history.map(h => (h.action === "buy" ? h.price : null));
   const sellPoints = history.map(h => (h.action === "sell" ? h.price : null));
 
+  // Aynı coin için tekrar çağrıldıysa (10sn'lik poll döngüsü, kullanıcı
+  // coin değiştirmedi) grafiği yok edip yeniden yaratmak yerine verisini
+  // yerinde güncelle — önceki davranış her poll'da destroy+recreate
+  // yapıyordu, bu da görünür bir titreme/flicker'a yol açıyordu.
+  if (signalChart && signalChartSymbol === symbol) {
+    signalChart.data.labels = labels;
+    signalChart.data.datasets[0].data = prices;
+    signalChart.data.datasets[1].data = buyPoints;
+    signalChart.data.datasets[2].data = sellPoints;
+    signalChart.update();
+    return;
+  }
+
   const ctx = document.getElementById("signalChart").getContext("2d");
   const datasets = [
     { label: "Fiyat", data: prices, borderColor: "#60a5fa", tension: 0.2, pointRadius: 0 },
@@ -136,6 +150,7 @@ async function selectSymbol(symbol) {
     data: { labels, datasets },
     options: { scales: { x: { display: false } } },
   });
+  signalChartSymbol = symbol;
 }
 
 async function refreshAll() {

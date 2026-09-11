@@ -339,6 +339,38 @@ alındı. Kod tarafı bitti ve 73 test yeşil.
 
 ---
 
+## Faz 3.6 — kritik bug: dashboard'da sinyal grafiği her poll'da titriyordu ✅ Tamamlandı
+
+**Nasıl bulundu:** Kullanıcı canlı dashboard'ı (`/mnt` dışı, gerçek VM'de)
+inceledi, bir coin kartına tıklayıp altındaki fiyat+sinyal grafiğini
+izlerken grafiğin birkaç saniyede bir gözle görülür şekilde titrediğini
+fark etti.
+
+**Sebep:** `app.js` her 10 saniyede bir `refreshAll()` ile tüm paneli
+polluyor. Equity ve drawdown grafikleri bu poll'da veriyi **yerinde**
+güncelliyordu (`chart.data.datasets[0].data = ...; chart.update()`), ama
+`selectSymbol()` içindeki sinyal grafiği her çağrıldığında
+`signalChart.destroy()` yapıp sıfırdan `new Chart(...)` yaratıyordu — coin
+değişmese, hatta veri hiç değişmese bile. Chart.js bir grafiği yok edip
+yeniden çizdiğinde kısa bir görsel flaş/titreme oluşur; 10 saniyede bir
+tekrarlanınca bu rahatsız edici hale geliyordu.
+
+**Değişen:** `omnitrade/web/static/app.js` — yeni `signalChartSymbol`
+değişkeni hangi coinin şu an çizili olduğunu takip ediyor. `selectSymbol()`
+aynı coin için tekrar çağrıldığında (poll döngüsü, kullanıcı coin
+değiştirmedi) artık grafiği yok etmiyor, sadece `labels`/`data`'yı
+güncelleyip `chart.update()` çağırıyor. Kullanıcı gerçekten farklı bir
+coine tıkladığında (`signalChartSymbol !== symbol`) hâlâ destroy+recreate
+yapılıyor — bu durumda zaten gerekli (eksen/legend'ın yeni veriye göre
+yeniden kurulması gerekiyor).
+
+**Not:** Python tarafında değişiklik yok, bu saf bir frontend düzeltmesi;
+73 test hâlâ geçiyor. Otomatik JS testi bu projede yok (stdlib-only,
+ekstra test altyapısı bilerek eklenmedi) — düzeltme `node --check` ile
+sözdizimi açısından ve mantık okuması ile doğrulandı.
+
+---
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı
