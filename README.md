@@ -50,6 +50,10 @@ python -m omnitrade.cli backtest --csv data/BTCUSDT_1h.csv --symbol BTC/USDT
 # -> [BTC/USDT] 6 işlem | getiri: +4.73% | kazanma oranı: 83.3% | max drawdown: 2.25%
 ```
 
+Backtest artık `config.yaml`'daki `risk` bölümünü (stop-loss/take-profit/
+pozisyon limiti) dry-run ile aynı şekilde uygular, sonuçlar gerçekten
+karşılaştırılabilir olsun diye. Eski basit davranış için `--no-risk`.
+
 ## 2. Dry-run — gerçek zamanlı ama sahte para ile
 
 `config/config.yaml`'da `dry_run: true` (varsayılan zaten böyle):

@@ -3,7 +3,20 @@ import unittest
 import pandas as pd
 
 from omnitrade.backtest import run_backtest
+from omnitrade.risk import RiskConfig
+from omnitrade.strategies.base import Action, Signal, Strategy
 from omnitrade.strategies.rsi_strategy import RsiStrategy
+
+
+class _AlwaysBuyStrategy(Strategy):
+    """Test yardımcısı: her zaman BUY üretir, tek pozisyon açıldıktan sonra
+    stop-loss/take-profit'in gerçekten backtest'i etkilediğini görmek için."""
+
+    def required_candles(self) -> int:
+        return 1
+
+    def generate_signal(self, df, symbol):
+        return Signal(Action.BUY, symbol, reason="test")
 
 
 def _wavy_df(n: int = 200, amplitude: float = 10.0, base: float = 100.0) -> pd.DataFrame:
@@ -71,6 +84,56 @@ class TestBacktest(unittest.TestCase):
         result = run_backtest(df, RsiStrategy(period=14), "BTC/USDT")
         self.assertEqual(result.trades, 0)
         self.assertEqual(result.final_balance, result.starting_balance)
+
+
+class TestBacktestRiskIntegration(unittest.TestCase):
+    """`risk_config` verildiğinde backtest'in dry-run Portfolio ile aynı
+    stop-loss/take-profit/pozisyon büyüklüğü kurallarını uygulaması —
+    ikisi arasındaki tutarsızlık Faz 1'de bulunup burada giderildi."""
+
+    def test_stop_loss_force_closes_position_before_strategy_sell(self):
+        # Fiyat sürekli düşüyor, %5 zarar eşiğini geçince strateji SELL
+        # üretmese bile pozisyon kapanmalı.
+        closes = [100.0] + [100.0 - i for i in range(1, 20)]
+        df = pd.DataFrame({
+            "open": closes, "high": closes, "low": closes, "close": closes,
+            "volume": [1.0] * len(closes),
+        })
+        risk = RiskConfig(max_position_pct=1.0, stop_loss_pct=0.05, take_profit_pct=None)
+        result = run_backtest(
+            df, _AlwaysBuyStrategy(), "BTC/USDT", starting_balance=1000.0,
+            fee_pct=0.0, slippage_pct=0.0, risk_config=risk,
+        )
+        # Zararla kapanmış olmalı: nihai bakiye başlangıçtan düşük.
+        self.assertLess(result.final_balance, result.starting_balance)
+
+    def test_max_position_pct_limits_stake_size(self):
+        closes = [100.0] * 30
+        df = pd.DataFrame({
+            "open": closes, "high": closes, "low": closes, "close": closes,
+            "volume": [1.0] * len(closes),
+        })
+        risk = RiskConfig(max_position_pct=0.1)
+        # AlwaysBuy + hiç SELL yok -> tek pozisyon, stake balance'ın %10'u olmalı,
+        # yani kalan balance ~900 civarında olmalı (fee/slippage sıfır).
+        result = run_backtest(
+            df, _AlwaysBuyStrategy(), "BTC/USDT", starting_balance=1000.0,
+            fee_pct=0.0, slippage_pct=0.0, risk_config=risk,
+        )
+        # Pozisyon fiyatı sabit kaldığı için equity ~ starting_balance kalmalı
+        # (sadece bir kez alım yapıldı, tek qty sabit fiyatta taşınıyor).
+        self.assertAlmostEqual(result.final_balance, 1000.0, delta=1.0)
+
+    def test_no_risk_config_keeps_legacy_stake_fraction_behavior(self):
+        df = pd.DataFrame({
+            "open": [100.0] * 30, "high": [100.0] * 30, "low": [100.0] * 30,
+            "close": [100.0] * 30, "volume": [1.0] * 30,
+        })
+        result = run_backtest(
+            df, _AlwaysBuyStrategy(), "BTC/USDT", starting_balance=1000.0,
+            stake_fraction=0.3, fee_pct=0.0, slippage_pct=0.0, risk_config=None,
+        )
+        self.assertEqual(result.trades, 1)
 
 
 if __name__ == "__main__":

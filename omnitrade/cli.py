@@ -31,9 +31,11 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     params = config.strategy_params if strategy_name == config.strategy else None
     strategy = get_strategy(strategy_name, params)
     df = load_csv(args.csv)
+    risk_config = None if args.no_risk else config.risk
     result = run_backtest(
         df, strategy, args.symbol, starting_balance=args.balance,
         fee_pct=config.fee_pct, slippage_pct=config.slippage_pct,
+        risk_config=risk_config,
     )
     print(result)
 
@@ -59,6 +61,11 @@ def main(argv: list[str] | None = None) -> None:
     bt.add_argument("--symbol", default="BTC/USDT")
     bt.add_argument("--strategy", default=None)
     bt.add_argument("--balance", type=float, default=1000.0)
+    bt.add_argument(
+        "--no-risk", action="store_true",
+        help="config.yaml'daki risk kurallarını (stop-loss/take-profit/pozisyon "
+             "limiti) uygulama, eski basit stake_fraction davranışını kullan.",
+    )
 
     sub.add_parser("web", help="Web dashboard'u başlat")
 

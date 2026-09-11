@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from omnitrade.risk import RiskConfig, RiskManager
 from omnitrade.strategies.base import Action, Strategy
 
 
@@ -44,12 +45,21 @@ class BacktestResult:
 def run_backtest(
     df: pd.DataFrame, strategy: Strategy, symbol: str,
     starting_balance: float = 1000.0, stake_fraction: float = 0.2, fee_pct: float = 0.001,
-    slippage_pct: float = 0.0005,
+    slippage_pct: float = 0.0005, risk_config: RiskConfig | None = None,
 ) -> BacktestResult:
     """`slippage_pct`: gerçek dünyada emrin, gördüğün fiyattan biraz daha
     kötü dolması (alışta daha pahalı, satışta daha ucuz). Bu modellenmezse
     backtest sonuçları gerçekte elde edeceğinden daha iyimser çıkar —
-    özellikle çok işlem yapan/düşük likiditeli stratejilerde önemli."""
+    özellikle çok işlem yapan/düşük likiditeli stratejilerde önemli.
+
+    `risk_config` verilirse (önerilen: config.yaml'daki `risk` bölümü),
+    dry-run Portfolio ile AYNI risk kuralları (stop-loss/take-profit,
+    pozisyon büyüklüğü) burada da uygulanır — böylece backtest sonucu
+    dry-run'da göreceğinden temelde farklı çıkmaz. Verilmezse eski
+    davranışa (`stake_fraction`, risk çıkışı yok) geri düşülür — geriye
+    dönük uyumluluk için.
+    """
+    risk = RiskManager(risk_config) if risk_config is not None else None
     balance = starting_balance
     qty = 0.0
     entry_price = 0.0
@@ -61,11 +71,36 @@ def run_backtest(
     for i in range(min_bars, len(df)):
         window = df.iloc[: i + 1]
         price = float(window["close"].iloc[-1])
+
+        # Risk çıkışları (stop-loss/take-profit) stratejiden ÖNCE kontrol
+        # edilir — dry-run Portfolio.check_risk_exits() ile aynı sıralama:
+        # bir pozisyon strateji SELL üretmeden de risk limitini aşabilir.
+        if risk is not None and qty > 0:
+            if risk.should_stop_loss(entry_price, price):
+                fill_price = price * (1 - slippage_pct)
+                balance += qty * fill_price * (1 - fee_pct)
+                if fill_price > entry_price:
+                    wins += 1
+                qty = 0.0
+            elif risk.should_take_profit(entry_price, price):
+                fill_price = price * (1 - slippage_pct)
+                balance += qty * fill_price * (1 - fee_pct)
+                if fill_price > entry_price:
+                    wins += 1
+                qty = 0.0
+
         signal = strategy.generate_signal(window, symbol)
 
         if signal.action == Action.BUY and qty == 0:
+            if risk is not None:
+                risk.update_daily_baseline(balance)
+                if risk.check_kill_switch(balance) or not risk.can_open_position(0):
+                    equity_curve.append(balance + qty * price)
+                    continue
+                stake = risk.position_stake(balance)
+            else:
+                stake = balance * stake_fraction
             fill_price = price * (1 + slippage_pct)
-            stake = balance * stake_fraction
             qty = (stake * (1 - fee_pct)) / fill_price
             balance -= stake
             entry_price = fill_price

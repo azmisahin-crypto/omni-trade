@@ -110,6 +110,33 @@ sonucuna güvenmek istatistiksel olarak zayıf.
   bayrağının davranışı hiç test edilmiyor. Bu risk taşıyan bir kod yolu
   olduğu için önceliklendirilmeli.
 
+## Faz 1.5 — backtest/dry-run risk tutarsızlığı düzeltmesi ✅ Tamamlandı
+
+**Neden:** Kapsamlı gözden geçirme sırasında bulundu: Faz 0'da `Portfolio`
+(dry-run) `RiskManager`'ı entegre etti (stop-loss/take-profit/pozisyon
+limiti), ama `backtest.py` hâlâ eski `stake_fraction` mantığıyla çalışıyordu
+— risk çıkışı hiç simüle edilmiyordu. README "aynı strateji + aynı maliyet
+modeli, karşılaştırılabilir sonuç" diyor ama gerçekte sadece komisyon/
+slippage ortaktı, risk davranışı değil. Bu, backtest'in dry-run'da
+göreceğinden **daha iyimser** sonuç vermesine yol açabiliyordu (stop-loss
+backtest'te hiç tetiklenmiyordu).
+
+**Değişenler:**
+
+- **`omnitrade/backtest.py`** — `run_backtest()` artık opsiyonel
+  `risk_config: RiskConfig | None` parametresi alıyor. Verilirse: her bar'da
+  stop-loss/take-profit kontrolü (stratejiden ÖNCE, dry-run
+  `Portfolio.check_risk_exits()` ile aynı sırada), pozisyon büyüklüğü
+  `risk.position_stake()` ile, günlük kill-switch kontrolü. Verilmezse
+  (`None`, varsayılan) eski `stake_fraction` davranışı korunur — geriye
+  dönük uyumlu.
+- **`omnitrade/cli.py`** — `backtest` komutu artık config'teki `risk`
+  bölümünü otomatik kullanır; eski davranışı istersen `--no-risk` bayrağı.
+- **`tests/test_backtest.py`** — `TestBacktestRiskIntegration`: stop-loss'un
+  gerçekten pozisyonu kapattığını, `max_position_pct`'in stake'i
+  sınırladığını, `risk_config=None` iken eski davranışın değişmediğini
+  doğrulayan 3 yeni test. Toplam: 29 → 32 test.
+
 ---
 
 ## Sıradaki fazlar (henüz uygulanmadı)
