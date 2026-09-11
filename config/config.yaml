@@ -1,8 +1,8 @@
 # Sırlar (API anahtarı, telegram token) burada DEĞİL — .env dosyasında.
 # .env.example'ı .env olarak kopyala ve doldur.
 
-dry_run: true            # true = sahte para (paper trading), false = GERÇEK PARA
-dry_run_wallet: 1000      # dry-run başlangıç bakiyesi (USDT)
+dry_run: true             # true = sahte para (paper trading), false = GERÇEK PARA
+dry_run_wallet: 50        # dry-run başlangıç bakiyesi (USDT)
 
 stake_currency: USDT
 timeframe: 1h
@@ -38,7 +38,7 @@ db_path: data/omnitrade.db
 web_port: 8080
 
 exchange:
-  name: binance             # ccxt'nin desteklediği herhangi bir borsa adı
+  name: binanceus             # ccxt'nin desteklediği herhangi bir borsa adı
 
 telegram:
-  enabled: true              # token/chat_id .env'den okunur
+  enabled: true               # token/chat_id .env'den okunur
