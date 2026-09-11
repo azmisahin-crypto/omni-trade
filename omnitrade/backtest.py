@@ -1,0 +1,105 @@
+"""CSV'den (timestamp,open,high,low,close,volume) geçmiş veriyle backtest.
+Aynı Strategy sınıfını kullanır — canlıda kullandığın kodla test ettiğin
+kod birebir aynı, farklı davranmaz.
+
+Veri indirmek için (örnek, ccxt kurulu olmalı):
+    python -c "
+import ccxt, pandas as pd
+ex = ccxt.binance()
+raw = ex.fetch_ohlcv('BTC/USDT', timeframe='1h', limit=1000)
+pd.DataFrame(raw, columns=['timestamp','open','high','low','close','volume']).to_csv('data/BTCUSDT_1h.csv', index=False)
+"
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import pandas as pd
+
+from omnitrade.strategies.base import Action, Strategy
+
+
+@dataclass
+class BacktestResult:
+    symbol: str
+    trades: int
+    final_balance: float
+    starting_balance: float
+    win_rate: float
+    max_drawdown_pct: float
+
+    @property
+    def total_return_pct(self) -> float:
+        return (self.final_balance / self.starting_balance - 1) * 100
+
+    def __str__(self) -> str:
+        return (
+            f"[{self.symbol}] {self.trades} işlem | "
+            f"getiri: {self.total_return_pct:+.2f}% | "
+            f"kazanma oranı: {self.win_rate*100:.1f}% | "
+            f"max drawdown: {self.max_drawdown_pct:.2f}%"
+        )
+
+
+def run_backtest(
+    df: pd.DataFrame, strategy: Strategy, symbol: str,
+    starting_balance: float = 1000.0, stake_fraction: float = 0.2, fee_pct: float = 0.001,
+) -> BacktestResult:
+    balance = starting_balance
+    qty = 0.0
+    entry_price = 0.0
+    trades = 0
+    wins = 0
+    equity_curve = [starting_balance]
+
+    min_bars = strategy.required_candles()
+    for i in range(min_bars, len(df)):
+        window = df.iloc[: i + 1]
+        price = float(window["close"].iloc[-1])
+        signal = strategy.generate_signal(window, symbol)
+
+        if signal.action == Action.BUY and qty == 0:
+            stake = balance * stake_fraction
+            qty = (stake * (1 - fee_pct)) / price
+            balance -= stake
+            entry_price = price
+            trades += 1
+
+        elif signal.action == Action.SELL and qty > 0:
+            proceeds = qty * price * (1 - fee_pct)
+            balance += proceeds
+            if price > entry_price:
+                wins += 1
+            qty = 0.0
+
+        equity_curve.append(balance + qty * price)
+
+    # Backtest sonunda açık pozisyon varsa son fiyattan kapat (raporlama için)
+    if qty > 0:
+        balance += qty * float(df["close"].iloc[-1]) * (1 - fee_pct)
+        qty = 0.0
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for v in equity_curve:
+        peak = max(peak, v)
+        dd = (peak - v) / peak * 100 if peak > 0 else 0
+        max_dd = max(max_dd, dd)
+
+    return BacktestResult(
+        symbol=symbol,
+        trades=trades,
+        final_balance=balance,
+        starting_balance=starting_balance,
+        win_rate=(wins / trades) if trades else 0.0,
+        max_drawdown_pct=max_dd,
+    )
+
+
+def load_csv(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    required = {"open", "high", "low", "close", "volume"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV'de eksik kolonlar: {missing}")
+    return df

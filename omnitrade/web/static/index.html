@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>OmniTrade Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-weight: 600; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #2a2e37; font-size: 14px; }
+  .buy { color: #4ade80; }
+  .sell { color: #f87171; }
+  canvas { max-height: 320px; }
+</style>
+</head>
+<body>
+  <h1>📈 OmniTrade Dashboard</h1>
+
+  <div class="card">
+    <h2>Equity</h2>
+    <canvas id="equityChart"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>Son İşlemler</h2>
+    <table id="tradesTable">
+      <thead>
+        <tr><th>Zaman</th><th>Sembol</th><th>Yön</th><th>Fiyat</th><th>Miktar</th><th>Sebep</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

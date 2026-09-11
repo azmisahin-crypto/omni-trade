@@ -1,0 +1,26 @@
+
+services:
+  bot:
+    build: .
+    container_name: omnitrade-bot
+    restart: unless-stopped
+    env_file: .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    command: ["python", "-m", "omnitrade.cli", "run"]
+
+  web:
+    build: .
+    container_name: omnitrade-web
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"   # SSH tünelle veya reverse proxy ile dışarı aç
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    command: ["python", "-m", "omnitrade.cli", "web"]
