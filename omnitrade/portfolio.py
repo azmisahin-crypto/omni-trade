@@ -54,7 +54,12 @@ class Portfolio:
         # Slippage satışta fiyatı senin aleyhine (biraz daha ucuz) yansıtır
         return price * (1 - self.slippage_pct)
 
-    def apply_signal(self, signal: Signal, price: float) -> None:
+    def apply_signal(self, signal: Signal, price: float) -> bool:
+        """Sinyali uygulamaya çalışır, gerçekten bir işlem (buy/sell)
+        gerçekleşip gerçekleşmediğini döner. Çağıran taraf (engine.py) bunu
+        Telegram bildirimi göndermeden önce kontrol etmeli — aksi halde
+        "pozisyon yokken sell sinyali" gibi hiçbir şey olmayan durumlarda da
+        yanlışlıkla "işlem yapıldı" bildirimi gider (bkz. CHANGELOG)."""
         if signal.action == Action.BUY and signal.symbol not in self.positions:
             if not self.risk.can_open_position(len(self.positions)):
                 self.storage.log_trade(
@@ -63,19 +68,23 @@ class Portfolio:
                            f"açık pozisyon={len(self.positions)})",
                     dry_run=True,
                 )
-                return
+                return False
 
             stake = self.risk.position_stake(self.balance)
             if stake <= 0 or stake > self.balance:
-                return
+                return False
             fill_price = self._buy_fill_price(price)
             qty = (stake * (1 - self.fee_pct)) / fill_price
             self.balance -= stake
             self.positions[signal.symbol] = Position(signal.symbol, qty, fill_price)
             self.storage.log_trade(signal.symbol, "buy", fill_price, qty, signal.reason, dry_run=True)
+            return True
 
         elif signal.action == Action.SELL and signal.symbol in self.positions:
             self._close_position(signal.symbol, price, reason=signal.reason)
+            return True
+
+        return False
 
     def _close_position(self, symbol: str, price: float, reason: str) -> None:
         pos = self.positions.pop(symbol)

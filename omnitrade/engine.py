@@ -59,11 +59,17 @@ class TradingEngine:
                 continue
 
             if self.config.dry_run:
-                self.portfolio.apply_signal(signal, price)
+                executed = self.portfolio.apply_signal(signal, price)
             else:
-                self._apply_live_signal(signal, price)
+                executed = self._apply_live_signal(signal, price)
 
-            self.notifier.trade_alert(signal.action.value, symbol, price, 0.0, signal.reason)
+            # Sadece GERÇEKTEN bir işlem olduğunda bildirim gönder. Örn.
+            # elinde pozisyon yokken strateji "sell" üretebilir (RSI > 70
+            # olduğu her an) — bu durumda apply_signal hiçbir şey yapmaz,
+            # dolayısıyla burada da Telegram'a "sell yapıldı" gibi yanıltıcı
+            # bir mesaj gitmemeli. Daha önce bu kontrol yoktu (bkz. CHANGELOG).
+            if executed:
+                self.notifier.trade_alert(signal.action.value, symbol, price, 0.0, signal.reason)
 
         if self.config.dry_run:
             # Sinyalden bağımsız stop-loss/take-profit kontrolü — bir pozisyon
@@ -73,7 +79,7 @@ class TradingEngine:
 
         self.storage.beat()
 
-    def _apply_live_signal(self, signal, price: float) -> None:
+    def _apply_live_signal(self, signal, price: float) -> bool:
         from omnitrade.strategies.base import Action
 
         if signal.action == Action.BUY and signal.symbol not in self._live_open_positions:
@@ -82,12 +88,15 @@ class TradingEngine:
                 self.exchange.create_market_order(signal.symbol, "buy", qty)
                 self.storage.log_trade(signal.symbol, "buy", price, qty, signal.reason, dry_run=False)
                 self._live_open_positions.add(signal.symbol)
+                return True
         elif signal.action == Action.SELL and signal.symbol in self._live_open_positions:
             qty = self._live_order_qty(signal.symbol, price)
             if qty > 0:
                 self.exchange.create_market_order(signal.symbol, "sell", qty)
                 self.storage.log_trade(signal.symbol, "sell", price, qty, signal.reason, dry_run=False)
                 self._live_open_positions.discard(signal.symbol)
+                return True
+        return False
 
     def _live_order_qty(self, symbol: str, price: float) -> float:
         """Risk yönetimini (RiskManager) kullanan canlı emir büyüklüğü hesabı.

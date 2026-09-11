@@ -91,5 +91,69 @@ class TestLiveOrderQty(unittest.TestCase):
         self.assertIn("BTC/USDT", engine._live_open_positions)
 
 
+class TestRunOnceOnlyNotifiesOnRealTrade(unittest.TestCase):
+    """Bug düzeltmesi: RsiStrategy pozisyondan bağımsız olarak RSI>70 iken
+    her zaman SELL üretir. Elde pozisyon yokken bu sinyal hiçbir işlem
+    yapmaz — ama düzeltmeden önce run_once yine de Telegram'a "sell"
+    bildirimi gönderiyordu. Bu test, gerçek işlem olmadan bildirim
+    gitmediğini doğrular."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_sell_signal_without_position_sends_no_telegram_alert(self, mock_exchange_cls):
+        from omnitrade.engine import TradingEngine
+        from omnitrade.strategies.base import Action, Signal
+
+        config = _make_config(self._tmpdir.name, dry_run=True)
+        engine = TradingEngine(config)
+        engine.strategy = _StubStrategy(Action.SELL)  # her zaman SELL üretir
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+
+        with patch.object(engine.notifier, "trade_alert") as mock_alert:
+            engine.run_once()
+
+        mock_alert.assert_not_called()
+        self.assertEqual(engine.storage.get_trades(limit=10), [])
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_buy_signal_sends_telegram_alert(self, mock_exchange_cls):
+        from omnitrade.engine import TradingEngine
+        from omnitrade.strategies.base import Action
+
+        config = _make_config(self._tmpdir.name, dry_run=True)
+        engine = TradingEngine(config)
+        engine.strategy = _StubStrategy(Action.BUY)
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+
+        with patch.object(engine.notifier, "trade_alert") as mock_alert:
+            engine.run_once()
+
+        mock_alert.assert_called_once()
+
+
+def _flat_df() -> pd.DataFrame:
+    closes = [100.0] * 30
+    return pd.DataFrame({
+        "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": [1.0] * len(closes),
+    })
+
+
+class _StubStrategy:
+    def __init__(self, action):
+        from omnitrade.strategies.base import Signal
+        self._action = action
+        self._Signal = Signal
+
+    def required_candles(self) -> int:
+        return 1
+
+    def generate_signal(self, df, symbol):
+        return self._Signal(self._action, symbol, reason="stub")
+
+
 if __name__ == "__main__":
     unittest.main()

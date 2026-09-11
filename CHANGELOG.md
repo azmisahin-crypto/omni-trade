@@ -203,6 +203,50 @@ alert'i olmayan bir kod yolu yok).
 
 ---
 
+## Faz 2.5 — kritik bug: gerçekleşmeyen işlem için Telegram bildirimi ✅ Tamamlandı
+
+**Nasıl bulundu:** Kullanıcı, canlıda RSI uzun süre 70 üstünde kalınca art
+arda "sell" logları ve Telegram bildirimleri görmüş, ama `data/omnitrade.db`
+`trades` tablosunda hiç sell kaydı yoktu. Sebebi: `RsiStrategy`, elde
+pozisyon olsun olmasın, RSI > 70 olduğu HER an SELL sinyali üretir —
+pozisyon kontrolünü strateji değil `Portfolio`/`_apply_live_signal` yapar.
+`Portfolio.apply_signal()` pozisyon yokken SELL'i doğru şekilde yok
+sayıyordu (hiç `log_trade` çağırmıyordu — kayıtların boş olması BEKLENEN
+davranıştı), **ama** `engine.py`'de `run_once()`, sinyal "hold" olmadığı
+sürece `notifier.trade_alert()`'i KOŞULSUZ çağırıyordu — `apply_signal`'ın
+gerçekten bir şey yapıp yapmadığına hiç bakmadan. Sonuç: hiçbir işlem
+olmamasına rağmen Telegram'a "sell yapıldı" gibi okunan yanıltıcı bir mesaj
+gidiyordu. Short pozisyon açılmıyor, borsaya hiçbir emir gitmiyor — sadece
+bildirim yanlıştı.
+
+Bu bug Faz 0'dan (`db8fdcf`) beri vardı, bu oturumdaki hiçbir değişiklikle
+(Faz 1/1.5/2) `engine.py` değiştirilmediği doğrulandı (`git diff` boş) —
+yani "eski versiyon"da da hep oradaydı, muhtemelen RSI daha önce bu kadar
+uzun süre pozisyonsuzken 70 üstünde takılı kalmadığı için hiç fark
+edilmemişti.
+
+**Değişenler:**
+
+- **`omnitrade/portfolio.py`** — `apply_signal()` artık `bool` döner:
+  gerçekten bir buy/sell gerçekleşti mi?
+- **`omnitrade/engine.py`** — `_apply_live_signal()` de aynı şekilde `bool`
+  döner. `run_once()` artık `notifier.trade_alert()`'i sadece `executed ==
+  True` iken çağırıyor.
+- **Testler:** `tests/test_portfolio.py` içine `TestApplySignalReturnValue`
+  (5 test — özellikle pozisyonsuz SELL'in `False` dönmesi VE hiçbir kayıt
+  oluşturmaması), `tests/test_engine.py` içine
+  `TestRunOnceOnlyNotifiesOnRealTrade` (2 test — pozisyonsuz SELL sinyalinde
+  Telegram'a hiç gitmediğini, gerçek BUY'da gittiğini doğrular).
+- **Toplam: 47 → 54 test.**
+
+**Not:** Bu, log mesajının kendisi değil (`"BTC/USDT -> sell (RSI=...)"` —
+bu sadece stratejinin ne düşündüğünü gösteriyor, doğru), sadece Telegram
+bildirimiydi. Loglardaki "sell" mesajını görmeye devam edeceksin (bu
+strateji sinyali, normal) — ama artık gerçek bir işlem olmadan Telegram'a
+gitmeyecek.
+
+---
+
 ### Faz 3 — İzlenebilirlik
 - [ ] Dashboard'a (`web/static/`) drawdown grafiği ve basit özet istatistik
       (toplam getiri, kazanma oranı) ekle — şu an sadece equity eğrisi ve
