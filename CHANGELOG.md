@@ -5,8 +5,10 @@ Amaç: projeye sonradan bakacak herkesin (bu, gelecekteki sen de olabilir,
 başka bir geliştirici de) "ne yapıldı, neden yapıldı, sırada ne var"
 sorularına hızlıca cevap bulabilmesi.
 
-Planın tamamı 6 fazdan oluşuyor. Bu dosyanın en altındaki "Sıradaki fazlar"
-bölümü, henüz uygulanmamış işleri detaylı biçimde listeler.
+Planlanan 6 fazın (0–5) tamamı, aradaki iki düzeltme fazı (1.5, 2.5) ve
+Faz 3/4/5 ile birlikte gelen "sinyal görünürlüğü" özelliğiyle birlikte
+tamamlandı. Yeni bir faz/özellik planlanırsa buraya aynı formatta
+eklenmeli — "Nasıl devam edilir" bölümü en altta.
 
 ---
 
@@ -166,8 +168,6 @@ kod yolu.
 
 ---
 
-## Sıradaki fazlar (henüz uygulanmadı)
-
 ## Faz 2 — Operasyonel dayanıklılık (e2-micro'ya özel) ✅ Tamamlandı
 
 **Neden:** Bot, e2-micro (1 vCPU/1GB RAM) gibi minik bir VM'de 7/24
@@ -248,16 +248,13 @@ gitmeyecek.
 ---
 
 ### Faz 3 — İzlenebilirlik, Faz 4 — Strateji altyapısı, Faz 5 — Canlıya geçiş
-### + Sinyal görünürlüğü (yeni özellik) — 🔧 Kod tamamlandı, dokümantasyon/commit kaldı
+### + Sinyal görünürlüğü (yeni özellik) ✅ Tamamlandı
 
 **Neden bu üçü birlikte:** Kullanıcı dashboard'da "pozisyona girilmese bile
 tüm coinler için long/short sinyalleri görme" istedi. İncelemede bunun
 zaten Faz 3 (dashboard) ve Faz 4'ün (çoklu parite) doğal kesişiminde
 olduğu görüldü, bu yüzden üçü ve yeni özellik tek oturumda birlikte ele
-alındı. **Kod tarafı bitti ve 73 test yeşil**, ama README/CHANGELOG
-polish'i ve git commit'leri bilerek bu haliyle (çalışan kod, henüz
-commit'lenmemiş) teslim edildi — devam eden oturum önce aşağıdaki "Kalan
-işler"i bitirip commit atmalı.
+alındı. Kod tarafı bitti ve 73 test yeşil.
 
 **Yeni: Sinyal görünürlüğü**
 - **`omnitrade/storage.py`** — yeni `signals` tablosu: her döngüde
@@ -319,19 +316,26 @@ işler"i bitirip commit atmalı.
   `fetch_free_balance` mock'lanıyor).
 - **Toplam: 54 → 73 test.**
 
-**Kalan işler (devam eden oturum bunları yapmalı):**
-- [ ] `README.md`'yi güncelle: yeni dashboard panelleri, `--walk-forward`
-  kullanımı, `pair_strategies` örneği, `log_level`, `backup_db.sh` cron
-  örneği, Faz 3/4/5'in artık tamamlandığı.
-- [ ] `config/config.yaml`'a `pair_strategies` ve `log_level` için örnek/
-  yorum satırları ekle (şu an kod çalışıyor ama config.yaml'da örnek yok).
-- [ ] Bu bölümü, iş bitince normal "Faz X ✅ Tamamlandı" formatına çevir
-  (ayrı commit'lere bölünebilir: sinyal-görünürlüğü / Faz3 / Faz4 / Faz5).
-- [ ] `git add -A && git commit` — bu değişiklikler henüz commit'lenmedi,
-  sadece working directory'de.
-- [ ] `scripts/backup_db.sh`'yi gerçek bir sqlite3 CLI'ı olan ortamda
-  dumanla test et (bu oturumda sqlite3 CLI kurulu değildi, sadece python
-  `sqlite3` modülüyle mantık doğrulandı).
+**Bu oturumda tamamlanan kalan işler:**
+- [x] `README.md` güncellendi: yeni dashboard panelleri (son-sinyal paneli
+  + özet istatistik/drawdown), `--walk-forward` kullanımı, `pair_strategies`
+  örneği, `log_level`, `backup_db.sh` cron örneği, "Canlıya geçmeden önce"
+  bölümü gerçek bakiye entegrasyonunu yansıtacak şekilde güncellendi, test
+  sayısı 73'e çekildi.
+- [x] `config/config.yaml`'a `pair_strategies` (örnek + varsayılan `{}`) ve
+  `log_level: INFO` eklendi.
+- [x] Bu bölüm "Faz X ✅ Tamamlandı" formatına çevrildi.
+- [x] `scripts/backup_db.sh`, gerçek `sqlite3` CLI'ı bu sandbox'ta
+  kurulamadığı (ağ erişimi yok) için python'un `sqlite3.Connection.backup()`
+  API'sini saran bir CLI shim üzerinden uçtan uca test edildi: WAL modunda
+  dolu bir DB'de `.backup` komutunun gerçekten çalışıp tutarlı bir kopya
+  ürettiği (signals/heartbeat tabloları dahil) ve DB henüz yokken script'in
+  hatasız (`exit 0`, uyarı mesajıyla) çıktığı doğrulandı. Gerçek `sqlite3`
+  CLI kurulu bir ortamda tekrar dumanla test edilmesi yine de önerilir —
+  shim sadece script'in ürettiği tek komut kalıbını (`.backup '<dest>'`)
+  destekliyor, tam CLI'nin yerini tutmaz.
+- [x] `git add -A && git commit` — bu oturumun değişiklikleri commit'lendi
+  (bkz. `git log`).
 
 ---
 
@@ -341,8 +345,9 @@ işler"i bitirip commit atmalı.
    temsil ediyor, mesajları neyin neden yapıldığını anlatıyor.
 2. `PYTHONPATH=. python -m unittest discover -s tests -v` ile testlerin
    hâlâ geçtiğini doğrulayarak başla.
-3. Yukarıdaki "Sıradaki fazlar" listesinden bir madde seç, üstündeki
-   fazın CHANGELOG girdisini oku (neden yapıldığını anlamak için), sonra
-   uygula.
-4. Her faz sonunda bu dosyaya yeni bir bölüm ekle — "Faz X — Tamamlandı"
-   + değişen dosyalar + neden.
+3. Planlanan 6 faz + 2 düzeltme fazı tamamlandı (bkz. yukarısı). Yeni bir
+   iş varsa (kullanıcı isteği, bulunan bug, yeni faz), önce burada "neden"
+   yazan bir bölüm taslağı aç, sonra uygula — kod değil dokümantasyon
+   önce planlanmalı ki gerekçe kaybolmasın.
+4. Her iş sonunda bu dosyaya yeni bir bölüm ekle — "Faz X ✅ Tamamlandı"
+   veya "<konu> — ✅ Tamamlandı" formatında + değişen dosyalar + neden.

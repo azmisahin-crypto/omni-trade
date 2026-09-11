@@ -18,6 +18,18 @@ strategy_params:           # RsiStrategy.__init__ parametreleriyle birebir eşle
   oversold: 30
   overbought: 70
 
+# Belirli bir coin için yukarıdaki strategy/strategy_params'ı override etmek
+# istersen buraya ekle — listelenmeyen coinler genel varsayılanı kullanmaya
+# devam eder. Örnek (varsayılan olarak devre dışı, kopyala/aç):
+# pair_strategies:
+#   ETH/USDT:
+#     strategy: RsiStrategy
+#     params:
+#       period: 21
+#       oversold: 25
+#       overbought: 75
+pair_strategies: {}
+
 # İşlem maliyeti modeli — hem backtest hem dry-run bu değerleri kullanır,
 # böylece iki ortamın sonuçları karşılaştırılabilir kalır.
 fee_pct: 0.001            # borsa komisyonu (0.001 = %0.1, Binance spot varsayılanı)
@@ -36,6 +48,8 @@ live_trading_confirmed: false
 
 db_path: data/omnitrade.db
 web_port: 8080
+
+log_level: INFO            # DEBUG / INFO / WARNING / ERROR — hem `run` hem `web` komutu kullanır
 
 exchange:
   name: binanceus             # ccxt'nin desteklediği herhangi bir borsa adı
