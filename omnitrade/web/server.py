@@ -6,10 +6,13 @@ motive eden' bir görünüm için bu yeterli.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from omnitrade.config import Config
+from omnitrade.stats import compute_drawdown_curve, compute_summary_stats
 from omnitrade.storage import Storage
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -29,13 +32,36 @@ def make_handler(storage: Storage):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path == "/api/trades":
+            parsed = urlparse(self.path)
+            path = parsed.path
+            query = parse_qs(parsed.query)
+
+            if path == "/api/trades":
                 self._json(storage.get_trades())
-            elif self.path == "/api/equity":
+            elif path == "/api/equity":
                 self._json(storage.get_equity_curve())
-            elif self.path in ("/", "/index.html"):
+            elif path == "/api/stats":
+                # Faz 3: drawdown grafiği + özet istatistik (toplam getiri,
+                # kazanma oranı) — önceden dashboard'da sadece equity eğrisi
+                # ve işlem tablosu vardı.
+                trades = storage.get_trades(limit=100000)
+                equity_curve = storage.get_equity_curve(limit=100000)
+                summary = compute_summary_stats(trades, equity_curve)
+                self._json({
+                    "summary": asdict(summary),
+                    "drawdown_curve": compute_drawdown_curve(equity_curve),
+                })
+            elif path == "/api/signals":
+                # Tüm coinler için EN SON sinyal — pozisyon açılmasa bile
+                # her coinin güncel durumunu gösteren panel bunu kullanır.
+                self._json(storage.get_latest_signals())
+            elif path == "/api/signals/history":
+                symbol = (query.get("symbol") or [None])[0]
+                limit = int((query.get("limit") or [500])[0])
+                self._json(storage.get_signals(symbol=symbol, limit=limit))
+            elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
-            elif self.path == "/app.js":
+            elif path == "/app.js":
                 self._serve_static("app.js", "application/javascript")
             else:
                 self.send_error(404)

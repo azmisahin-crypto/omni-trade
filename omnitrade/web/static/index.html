@@ -7,20 +7,77 @@
 <style>
   body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
   h1 { font-weight: 600; }
+  h2 { font-weight: 600; font-size: 16px; margin: 0 0 14px; color: #c7cad1; }
   .card { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #2a2e37; font-size: 14px; }
-  .buy { color: #4ade80; }
-  .sell { color: #f87171; }
-  canvas { max-height: 320px; }
+  .buy, .long { color: #4ade80; }
+  .sell, .short { color: #f87171; }
+  .hold { color: #9ca3af; }
+  canvas { max-height: 280px; }
+
+  .stats-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 140px; background: #12141a; border-radius: 10px; padding: 14px 16px; }
+  .stat .label { font-size: 12px; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; }
+  .stat .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+
+  .signal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .signal-card {
+    background: #12141a; border-radius: 10px; padding: 14px; cursor: pointer;
+    border: 1px solid transparent; transition: border-color .15s;
+  }
+  .signal-card:hover { border-color: #3a3f4b; }
+  .signal-card.selected { border-color: #60a5fa; }
+  .signal-card .symbol { font-weight: 700; font-size: 15px; }
+  .signal-card .badge {
+    display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+  }
+  .badge.buy, .badge.long { background: #143a24; color: #4ade80; }
+  .badge.sell, .badge.short { background: #3a1616; color: #f87171; }
+  .badge.hold { background: #23262e; color: #9ca3af; }
+  .signal-card .price { margin-top: 8px; font-size: 14px; color: #c7cad1; }
+  .signal-card .reason { margin-top: 4px; font-size: 12px; color: #6b7280; }
+  .signal-card .ago { margin-top: 4px; font-size: 11px; color: #4b5563; }
+
+  #signalDetail { display: none; margin-top: 16px; }
+  #signalDetail.visible { display: block; }
 </style>
 </head>
 <body>
   <h1>📈 OmniTrade Dashboard</h1>
 
   <div class="card">
+    <h2>Özet</h2>
+    <div class="stats-row">
+      <div class="stat"><div class="label">Toplam Getiri</div><div class="value" id="statReturn">–</div></div>
+      <div class="stat"><div class="label">Kazanma Oranı</div><div class="value" id="statWinRate">–</div></div>
+      <div class="stat"><div class="label">Max Drawdown</div><div class="value" id="statDrawdown">–</div></div>
+      <div class="stat"><div class="label">Kapanan İşlem</div><div class="value" id="statTradeCount">–</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Tüm Coinler — Son Sinyal</h2>
+    <p style="color:#6b7280;font-size:13px;margin-top:-8px;">
+      Pozisyona girilmemiş olsa bile her coinin en son ürettiği sinyal burada görünür.
+      Bir karta tıklayınca altında fiyat + sinyal grafiği açılır.
+    </p>
+    <div class="signal-grid" id="signalGrid"></div>
+    <div id="signalDetail">
+      <h2 id="signalDetailTitle">—</h2>
+      <canvas id="signalChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Equity</h2>
     <canvas id="equityChart"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>Drawdown</h2>
+    <canvas id="drawdownChart"></canvas>
   </div>
 
   <div class="card">

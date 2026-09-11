@@ -24,6 +24,13 @@ class TradingEngine:
         self.config = config
         self.storage = Storage(config.db_path)
         self.strategy = get_strategy(config.strategy, config.strategy_params)
+        # Faz 4: coin başına strateji override'ı. `config.pair_strategies`'te
+        # olmayan pariteler `self.strategy` (varsayılan) kullanmaya devam
+        # eder — bkz. run_once()'daki `self.strategies.get(symbol, self.strategy)`.
+        self.strategies = {
+            symbol: get_strategy(spec["strategy"], spec.get("params", {}))
+            for symbol, spec in config.pair_strategies.items()
+        }
         self.exchange = ExchangeClient(
             config.exchange.name, config.exchange.api_key, config.exchange.api_secret,
             dry_run=config.dry_run,
@@ -45,23 +52,30 @@ class TradingEngine:
     def run_once(self) -> None:
         last_prices: dict[str, float] = {}
         for symbol in self.config.pairs:
+            strategy = self.strategies.get(symbol, self.strategy)
             df = self.exchange.fetch_ohlcv_df(
                 symbol, timeframe=self.config.timeframe,
-                limit=max(self.strategy.required_candles() + 10, 100),
+                limit=max(strategy.required_candles() + 10, 100),
             )
             price = float(df["close"].iloc[-1])
             last_prices[symbol] = price
 
-            signal = self.strategy.generate_signal(df, symbol)
+            signal = strategy.generate_signal(df, symbol)
             log.info("%s -> %s (%s)", symbol, signal.action.value, signal.reason)
 
             if signal.action.value == "hold":
+                # Hold sinyalini de kaydet — dashboard'daki "tüm coinler için
+                # son sinyal" paneli pozisyon açılmasa da coinin güncel
+                # durumunu (ve fiyatını) göstermeli.
+                self.storage.log_signal(symbol, signal.action.value, price, signal.reason, executed=False)
                 continue
 
             if self.config.dry_run:
                 executed = self.portfolio.apply_signal(signal, price)
             else:
                 executed = self._apply_live_signal(signal, price)
+
+            self.storage.log_signal(symbol, signal.action.value, price, signal.reason, executed=executed)
 
             # Sadece GERÇEKTEN bir işlem olduğunda bildirim gönder. Örn.
             # elinde pozisyon yokken strateji "sell" üretebilir (RSI > 70
@@ -104,10 +118,13 @@ class TradingEngine:
         Bilinçli güvenlik freni: sadece `dry_run: false` yetmez — ayrıca
         `live_trading_confirmed: true` de config.yaml'da açıkça set edilmeli.
         Bu, "yanlışlıkla canlıya geçme" riskine karşı ikinci bir bariyer.
-        Gerçek bakiyeni borsadan çekip risk.position_stake() ile pozisyon
-        büyüklüğü hesaplayan kısmı KENDİ borsa/bakiye entegrasyonuna göre
-        tamamlaman gerekir — burada verilen implementasyon bir başlangıç
-        noktasıdır, kör kör güvenme.
+
+        Faz 5: artık `dry_run_wallet` DEĞİL, borsadan çekilen GERÇEK
+        `stake_currency` bakiyesi (`exchange.fetch_free_balance`) baz
+        alınıyor — önceki implementasyon bilerek sahte bakiyeyi kullanıyordu
+        (bkz. CHANGELOG 'Sıradaki fazlar' / Faz 5), bu artık tamamlandı.
+        Canlıya geçmeden önce yine de `LIVE_TRADING_CHECKLIST.md`'deki
+        adımları uygula.
         """
         if not self.config.live_trading_confirmed:
             raise NotImplementedError(
@@ -116,11 +133,8 @@ class TradingEngine:
                 "bir güvenlik freni — önce haftalarca dry-run'da pozitif sonuç "
                 "gördüğünden emin ol, sonra bu bayrağı aç."
             )
-        # NOT: Burada gerçek borsa bakiyeni (self.exchange üzerinden) çekip
-        # risk.position_stake(gerçek_bakiye) ile stake hesaplaman gerekir.
-        # Basitlik için burada dry_run_wallet baz alınıyor — KENDİ gerçek
-        # bakiyeni çekecek şekilde güncellemeden canlıya geçme.
-        stake = self.live_risk.position_stake(self.config.dry_run_wallet)
+        balance = self.exchange.fetch_free_balance(self.config.stake_currency)
+        stake = self.live_risk.position_stake(balance)
         if stake <= 0:
             return 0.0
         return stake / price

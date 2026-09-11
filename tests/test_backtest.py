@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from omnitrade.backtest import run_backtest
+from omnitrade.backtest import run_backtest, run_walk_forward, walk_forward_windows
 from omnitrade.risk import RiskConfig
 from omnitrade.strategies.base import Action, Signal, Strategy
 from omnitrade.strategies.rsi_strategy import RsiStrategy
@@ -134,6 +134,45 @@ class TestBacktestRiskIntegration(unittest.TestCase):
             stake_fraction=0.3, fee_pct=0.0, slippage_pct=0.0, risk_config=None,
         )
         self.assertEqual(result.trades, 1)
+
+
+class TestWalkForwardWindows(unittest.TestCase):
+    """Faz 4: veri N ardışık test penceresine bölünüyor mu, sınır durumlar
+    (yetersiz veri, n_splits=1) doğru mu ele alınıyor."""
+
+    def test_splits_into_n_contiguous_non_overlapping_windows(self):
+        windows = walk_forward_windows(n_rows=100, n_splits=4, min_bars=20)
+        self.assertEqual(len(windows), 4)
+        # Örtüşmemeli, ilk pencere min_bars'tan başlamalı, son pencere n_rows'ta bitmeli
+        self.assertEqual(windows[0][0], 20)
+        self.assertEqual(windows[-1][1], 100)
+        for (s1, e1), (s2, e2) in zip(windows, windows[1:]):
+            self.assertEqual(e1, s2)
+
+    def test_returns_empty_when_not_enough_data(self):
+        self.assertEqual(walk_forward_windows(n_rows=10, n_splits=4, min_bars=20), [])
+
+    def test_single_split_covers_all_usable_data(self):
+        windows = walk_forward_windows(n_rows=100, n_splits=1, min_bars=20)
+        self.assertEqual(windows, [(20, 100)])
+
+
+class TestRunWalkForward(unittest.TestCase):
+    def test_runs_independent_backtest_per_window(self):
+        df = _wavy_df(n=200)
+        results = run_walk_forward(
+            df, RsiStrategy(), "BTC/USDT", n_splits=4, starting_balance=1000.0,
+        )
+        self.assertEqual(len(results), 4)
+        for i, r in enumerate(results, start=1):
+            self.assertEqual(r.symbol, f"BTC/USDT #{i}")
+            # Her pencere kendi starting_balance'ıyla başlamalı (bağımsız)
+            self.assertEqual(r.starting_balance, 1000.0)
+
+    def test_empty_when_data_too_short_for_any_window(self):
+        df = _wavy_df(n=10)
+        results = run_walk_forward(df, RsiStrategy(), "BTC/USDT", n_splits=4)
+        self.assertEqual(results, [])
 
 
 if __name__ == "__main__":

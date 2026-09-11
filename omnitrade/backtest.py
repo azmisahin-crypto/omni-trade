@@ -139,6 +139,66 @@ def run_backtest(
     )
 
 
+def walk_forward_windows(n_rows: int, n_splits: int, min_bars: int) -> list[tuple[int, int]]:
+    """Veriyi `n_splits` ardışık, örtüşmeyen test penceresine böler ve her
+    pencerenin (start, end) satır aralığını (exclusive end) döndürür.
+
+    Walk-forward'ın amacı: backtest'in TEK bir dönemde (örn. hep yükseliş
+    trendinde) iyi görünüp başka bir dönemde (yatay/düşüş) çökmediğini
+    görmek — Faz 1'deki "farklı piyasa rejimi" testinden bir adım öteye,
+    stratejinin gerçek veri üzerinde zaman içinde tutarlı olup olmadığını
+    ölçer. Her pencere kendi başına bağımsız bir backtest koşusu olarak
+    çalıştırılır (bkz. `run_walk_forward`) — "train" adımı yok çünkü
+    stratejiler burada parametre öğrenmiyor (fit edilmiyor), sadece farklı
+    zaman dilimlerinde nasıl davrandığı karşılaştırılıyor.
+    """
+    if n_splits < 1:
+        raise ValueError("n_splits en az 1 olmalı")
+    usable = n_rows - min_bars
+    if usable <= 0:
+        return []
+    window_size = usable // n_splits
+    if window_size <= 0:
+        return []
+    windows = []
+    for i in range(n_splits):
+        start = min_bars + i * window_size
+        end = n_rows if i == n_splits - 1 else min_bars + (i + 1) * window_size
+        if end - start > 0:
+            windows.append((start, end))
+    return windows
+
+
+def run_walk_forward(
+    df: pd.DataFrame, strategy: Strategy, symbol: str, n_splits: int = 4,
+    starting_balance: float = 1000.0, stake_fraction: float = 0.2, fee_pct: float = 0.001,
+    slippage_pct: float = 0.0005, risk_config: RiskConfig | None = None,
+) -> list[BacktestResult]:
+    """Veriyi `n_splits` ardışık döneme böler, her dönemde bağımsız bir
+    `run_backtest` koşar (her dönem kendi `starting_balance`'ıyla başlar,
+    böylece bir önceki dönemin sonucu bir sonrakini etkilemez ve dönemler
+    doğrudan karşılaştırılabilir kalır). Sonuç listesi kronolojik sıradadır
+    — her elemanın `.symbol` alanı "BTC/USDT #1", "BTC/USDT #2" ... şeklinde
+    hangi döneme ait olduğunu belirtir.
+    """
+    min_bars = strategy.required_candles()
+    windows = walk_forward_windows(len(df), n_splits, min_bars)
+    results = []
+    for idx, (start, end) in enumerate(windows, start=1):
+        # Her pencereye stratejinin ihtiyaç duyduğu ısınma barlarını da dahil
+        # et (window'un ilk barlarında da sinyal üretilebilsin diye), ama
+        # sonuçları sadece o pencerenin kendi aralığıyla sınırlı tut.
+        warm_start = max(0, start - min_bars)
+        window_df = df.iloc[warm_start:end].reset_index(drop=True)
+        result = run_backtest(
+            window_df, strategy, f"{symbol} #{idx}",
+            starting_balance=starting_balance, stake_fraction=stake_fraction,
+            fee_pct=fee_pct, slippage_pct=slippage_pct, risk_config=risk_config,
+        )
+        results.append(result)
+    return results
+
+
 def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     required = {"open", "high", "low", "close", "volume"}

@@ -68,6 +68,18 @@ class ExchangeClient:
         ticker = client.fetch_ticker(symbol)
         return float(ticker["last"])
 
+    def fetch_free_balance(self, currency: str) -> float:
+        """Borsadaki GERÇEK kullanılabilir bakiyeyi çeker (stake_currency,
+        örn. USDT). Sadece canlı modda (dry_run=False) anlamlı — dry-run'da
+        `dry_run_wallet` config değeri kullanılmaya devam eder.
+
+        Faz 5: `_live_order_qty` artık bunu kullanıyor, önceden
+        `dry_run_wallet`'ı baz alıyordu (bkz. CHANGELOG 'Faz 5')."""
+        client = self._require_client()
+        balance = _with_retry(client.fetch_balance)
+        free = balance.get("free", {}) if isinstance(balance, dict) else {}
+        return float(free.get(currency, 0.0) or 0.0)
+
     def create_market_order(self, symbol: str, side: str, qty: float) -> dict:
         """Sadece dry_run=False iken çağrılmalı — gerçek para hareket eder."""
         if self.dry_run:

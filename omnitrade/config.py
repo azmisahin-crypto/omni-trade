@@ -49,6 +49,10 @@ class Config:
     pairs: list = field(default_factory=lambda: ["BTC/USDT"])
     strategy: str = "RsiStrategy"
     strategy_params: dict = field(default_factory=dict)
+    # Faz 4: coin başına farklı strateji/parametre override'ı. Boşsa tüm
+    # pariteler `strategy`/`strategy_params`'ı kullanır (eski davranış).
+    # Örn: {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}}
+    pair_strategies: dict = field(default_factory=dict)
     poll_interval_seconds: int = 60
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
@@ -57,6 +61,10 @@ class Config:
     slippage_pct: float = 0.0005
     db_path: str = "data/omnitrade.db"
     web_port: int = 8080
+    # Faz 3: log seviyesi artık config'ten okunuyor (önceden cli.py'de
+    # sabitti). DEBUG/INFO/WARNING/ERROR — geçersiz bir değer verilirse
+    # INFO'ya düşülür (bkz. cli.py).
+    log_level: str = "INFO"
     # Canlı emirler (dry_run: false) için ek bir bilinçli onay bayrağı.
     # engine.py bunu kontrol eder — sadece dry_run:false yetmez, bkz. README
     # "Canlıya geçmeden önce" bölümü.
@@ -83,9 +91,11 @@ def load_config(config_path: str = "config/config.yaml", env_path: str = ".env")
         pairs=raw.get("pairs", ["BTC/USDT"]),
         strategy=raw.get("strategy", "RsiStrategy"),
         strategy_params=raw.get("strategy_params", {}) or {},
+        pair_strategies=raw.get("pair_strategies", {}) or {},
         poll_interval_seconds=int(raw.get("poll_interval_seconds", 60)),
         db_path=raw.get("db_path", "data/omnitrade.db"),
         web_port=int(raw.get("web_port", 8080)),
+        log_level=str(raw.get("log_level", "INFO")).upper(),
         fee_pct=float(raw.get("fee_pct", 0.001)),
         slippage_pct=float(raw.get("slippage_pct", 0.0005)),
         live_trading_confirmed=bool(raw.get("live_trading_confirmed", False)),

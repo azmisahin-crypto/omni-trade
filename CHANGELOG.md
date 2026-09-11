@@ -247,33 +247,91 @@ gitmeyecek.
 
 ---
 
-### Faz 3 — İzlenebilirlik
-- [ ] Dashboard'a (`web/static/`) drawdown grafiği ve basit özet istatistik
-      (toplam getiri, kazanma oranı) ekle — şu an sadece equity eğrisi ve
-      işlem tablosu var.
-- [ ] `scripts/backup_db.sh`: `sqlite3 .backup` ile günlük yedek + cron
-      örneği (README'de).
-- [ ] Log formatını yapılandır (şu an sadece `logging.basicConfig` var,
-      seviye config'ten okunmuyor).
+### Faz 3 — İzlenebilirlik, Faz 4 — Strateji altyapısı, Faz 5 — Canlıya geçiş
+### + Sinyal görünürlüğü (yeni özellik) — 🔧 Kod tamamlandı, dokümantasyon/commit kaldı
 
-### Faz 4 — Strateji altyapısı
-- [x] `strategy_params` config'ten okunuyor (Faz 0'da yapıldı).
-- [ ] Aynı anda birden fazla strateji/pariteyi paralel çalıştırma desteği
-      (şu an tek strateji tüm pariteler için kullanılıyor — `config.pairs`
-      listesi zaten var ama hepsi aynı stratejiyi kullanıyor).
-- [ ] Walk-forward test desteği: `backtest.py`'ye zaman bazlı train/test
-      split ekle (overfitting kontrolü için Faz 1'deki "farklı rejim"
-      testinden bir adım öteye).
+**Neden bu üçü birlikte:** Kullanıcı dashboard'da "pozisyona girilmese bile
+tüm coinler için long/short sinyalleri görme" istedi. İncelemede bunun
+zaten Faz 3 (dashboard) ve Faz 4'ün (çoklu parite) doğal kesişiminde
+olduğu görüldü, bu yüzden üçü ve yeni özellik tek oturumda birlikte ele
+alındı. **Kod tarafı bitti ve 73 test yeşil**, ama README/CHANGELOG
+polish'i ve git commit'leri bilerek bu haliyle (çalışan kod, henüz
+commit'lenmemiş) teslim edildi — devam eden oturum önce aşağıdaki "Kalan
+işler"i bitirip commit atmalı.
 
-### Faz 5 — Canlıya geçiş hazırlığı
-- [ ] `_live_order_qty` içindeki `dry_run_wallet` yerine gerçek borsa
-      bakiyesini çekecek implementasyonu tamamla (bkz. `engine.py` içi
-      yorum — bu KRİTİK, canlıya geçmeden önce mutlaka yapılmalı).
-- [ ] `LIVE_TRADING_CHECKLIST.md`: go/no-go kriterlerini listeleyen bir
-      doküman (min. dry-run süresi, min. işlem sayısı, API anahtar izin
-      kontrolü, vb.)
-- [ ] API anahtar izinleri: sadece trade, withdrawal kapalı — bunu
-      doğrulayan bir manuel checklist maddesi.
+**Yeni: Sinyal görünürlüğü**
+- **`omnitrade/storage.py`** — yeni `signals` tablosu: her döngüde
+  ÜRETİLEN her sinyali tutar (hold dahil, `trades` tablosunun aksine
+  pozisyon açılıp açılmadığından bağımsız). `log_signal()`,
+  `get_latest_signals()` (coin başına en son sinyal), `get_signals()`
+  (coin bazlı geçmiş, grafik için).
+- **`omnitrade/engine.py`** — `run_once()` artık her coin için ürettiği
+  sinyali (hold dahil) `storage.log_signal()` ile kaydediyor.
+- **`omnitrade/web/server.py`** — yeni endpoint'ler: `/api/signals` (tüm
+  coinler için son sinyal), `/api/signals/history?symbol=&limit=`,
+  `/api/stats` (özet istatistik + drawdown eğrisi, bkz. Faz 3).
+- **`omnitrade/web/static/index.html` + `app.js`** — dashboard'a yeni
+  "Tüm Coinler — Son Sinyal" paneli (renkli LONG/SHORT/HOLD rozetli
+  kartlar, coine tıklayınca fiyat+sinyal işaretli grafik açılıyor).
+
+**Faz 3 — İzlenebilirlik**
+- **`omnitrade/stats.py` (yeni)** — `compute_summary_stats()` (toplam
+  getiri, kazanma oranı — `buy_blocked` gibi gerçekleşmemiş kayıtlar hariç,
+  max drawdown, kapanan işlem sayısı), `compute_drawdown_curve()`. Testler:
+  `tests/test_stats.py`.
+- **Dashboard** — Özet istatistik kartları + drawdown grafiği eklendi
+  (yukarıdaki dosyalarda, `/api/stats` üzerinden besleniyor).
+- **`scripts/backup_db.sh` (yeni)** — `sqlite3 .backup` ile günlük yedek
+  (WAL modunda çalıştığı için `cp` yerine bilerek `.backup` kullanıyor).
+  README'ye cron örneği eklenmedi — **kalan iş**.
+- **`omnitrade/config.py` + `cli.py`** — yeni `log_level` config alanı,
+  `cmd_run`/`cmd_web` artık bunu `logging`e uyguluyor (önceden sabit INFO'ydu).
+
+**Faz 4 — Strateji altyapısı**
+- **`omnitrade/config.py`** — yeni `pair_strategies` alanı: coin başına
+  strateji/parametre override'ı (örn. `{"ETH/USDT": {"strategy": "RsiStrategy",
+  "params": {"period": 21}}}`). Boş bırakılan pariteler varsayılan
+  `strategy`'i kullanmaya devam eder.
+- **`omnitrade/engine.py`** — `self.strategies` dict'i, `run_once()`
+  `self.strategies.get(symbol, self.strategy)` ile per-pair strateji
+  seçiyor (`required_candles()` de per-pair strateji üzerinden hesaplanıyor).
+  **Not:** bu paralellik çalışma zamanında thread/process değil — aynı
+  tek-thread döngüde her coin kendi strateji instance'ıyla işleniyor
+  (bilinçli tasarım: stdlib-only, basit mimariyi korumak için).
+- **`omnitrade/backtest.py`** — `walk_forward_windows()` + `run_walk_forward()`:
+  veriyi N ardışık, örtüşmeyen döneme bölüp her birinde bağımsız backtest
+  koşuyor (overfitting kontrolü). `cli.py`'de `backtest --walk-forward N`
+  bayrağı.
+- Testler: `tests/test_engine.py::TestPairStrategies`,
+  `tests/test_backtest.py::TestWalkForwardWindows`/`TestRunWalkForward`.
+
+**Faz 5 — Canlıya geçiş hazırlığı**
+- **`omnitrade/exchange.py`** — yeni `fetch_free_balance(currency)`:
+  borsadan gerçek kullanılabilir bakiyeyi çeker (retry'lı).
+- **`omnitrade/engine.py`** — `_live_order_qty` artık `dry_run_wallet`
+  DEĞİL, `fetch_free_balance` ile çekilen GERÇEK bakiyeyi kullanıyor —
+  önceki implementasyon bilerek sahte bakiyeyi baz alıyordu, bu KRİTİK
+  eksik artık tamamlandı.
+- **`LIVE_TRADING_CHECKLIST.md` (yeni)** — go/no-go kriterleri: strateji
+  doğrulama (walk-forward + min. dry-run süresi), risk parametreleri, API
+  anahtar izinleri (withdrawal kapalı!), operasyonel hazırlık, son onay.
+- Testler: `tests/test_engine.py::TestLiveOrderQty` güncellendi (artık
+  `fetch_free_balance` mock'lanıyor).
+- **Toplam: 54 → 73 test.**
+
+**Kalan işler (devam eden oturum bunları yapmalı):**
+- [ ] `README.md`'yi güncelle: yeni dashboard panelleri, `--walk-forward`
+  kullanımı, `pair_strategies` örneği, `log_level`, `backup_db.sh` cron
+  örneği, Faz 3/4/5'in artık tamamlandığı.
+- [ ] `config/config.yaml`'a `pair_strategies` ve `log_level` için örnek/
+  yorum satırları ekle (şu an kod çalışıyor ama config.yaml'da örnek yok).
+- [ ] Bu bölümü, iş bitince normal "Faz X ✅ Tamamlandı" formatına çevir
+  (ayrı commit'lere bölünebilir: sinyal-görünürlüğü / Faz3 / Faz4 / Faz5).
+- [ ] `git add -A && git commit` — bu değişiklikler henüz commit'lenmedi,
+  sadece working directory'de.
+- [ ] `scripts/backup_db.sh`'yi gerçek bir sqlite3 CLI'ı olan ortamda
+  dumanla test et (bu oturumda sqlite3 CLI kurulu değildi, sadece python
+  `sqlite3` modülüyle mantık doğrulandı).
 
 ---
 

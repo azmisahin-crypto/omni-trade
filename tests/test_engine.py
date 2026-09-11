@@ -45,19 +45,24 @@ class TestLiveOrderQty(unittest.TestCase):
             engine._live_order_qty("BTC/USDT", 100.0)
 
     @patch("omnitrade.engine.ExchangeClient")
-    def test_computes_qty_from_risk_manager_when_confirmed(self, mock_exchange_cls):
+    def test_computes_qty_from_real_exchange_balance_when_confirmed(self, mock_exchange_cls):
+        """Faz 5: stake artık `dry_run_wallet` DEĞİL, borsadan çekilen
+        gerçek bakiyeye (`fetch_free_balance`) göre hesaplanır."""
         from omnitrade.engine import TradingEngine
 
         config = _make_config(
             self._tmpdir.name,
             live_trading_confirmed=True,
-            dry_run_wallet=1000.0,
+            dry_run_wallet=999999.0,  # bilerek farklı — kullanılmamalı
+            stake_currency="USDT",
             risk=RiskConfig(max_position_pct=0.25),
         )
         engine = TradingEngine(config)
+        engine.exchange.fetch_free_balance.return_value = 1000.0
         qty = engine._live_order_qty("BTC/USDT", price=100.0)
-        # stake = 1000 * 0.25 = 250, qty = 250 / 100 = 2.5
+        # stake = 1000 (gerçek bakiye) * 0.25 = 250, qty = 250 / 100 = 2.5
         self.assertAlmostEqual(qty, 2.5)
+        engine.exchange.fetch_free_balance.assert_called_once_with("USDT")
 
     @patch("omnitrade.engine.ExchangeClient")
     def test_apply_live_signal_does_not_call_exchange_when_not_confirmed(self, mock_exchange_cls):
@@ -83,12 +88,59 @@ class TestLiveOrderQty(unittest.TestCase):
 
         config = _make_config(self._tmpdir.name, dry_run=False, live_trading_confirmed=True)
         engine = TradingEngine(config)
+        engine.exchange.fetch_free_balance.return_value = 1000.0
         signal = Signal(Action.BUY, "BTC/USDT", reason="test")
 
         engine._apply_live_signal(signal, price=100.0)
 
         engine.exchange.create_market_order.assert_called_once()
         self.assertIn("BTC/USDT", engine._live_open_positions)
+
+
+class TestPairStrategies(unittest.TestCase):
+    """Faz 4: `pair_strategies` ile coin başına farklı strateji/parametre
+    tanımlanabilmeli, tanımlanmayan pariteler varsayılan `strategy`'i
+    kullanmaya devam etmeli."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_pair_without_override_uses_default_strategy(self, mock_exchange_cls):
+        from omnitrade.engine import TradingEngine
+        from omnitrade.strategies.rsi_strategy import RsiStrategy
+
+        config = _make_config(
+            self._tmpdir.name,
+            pairs=["BTC/USDT", "ETH/USDT"],
+            pair_strategies={"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}},
+        )
+        engine = TradingEngine(config)
+
+        self.assertNotIn("BTC/USDT", engine.strategies)  # override yok -> varsayılan kullanılır
+        self.assertIsInstance(engine.strategies["ETH/USDT"], RsiStrategy)
+        self.assertEqual(engine.strategies["ETH/USDT"].period, 21)
+        self.assertEqual(engine.strategy.period, 14)  # default RsiStrategy param
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_run_once_uses_per_pair_strategy(self, mock_exchange_cls):
+        from omnitrade.engine import TradingEngine
+        from omnitrade.strategies.base import Action
+
+        config = _make_config(
+            self._tmpdir.name, dry_run=True, pairs=["BTC/USDT", "ETH/USDT"],
+        )
+        engine = TradingEngine(config)
+        engine.strategy = _StubStrategy(Action.HOLD)
+        engine.strategies = {"ETH/USDT": _StubStrategy(Action.BUY)}
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+
+        engine.run_once()
+
+        latest = {s["symbol"]: s["action"] for s in engine.storage.get_latest_signals()}
+        self.assertEqual(latest["BTC/USDT"], "hold")
+        self.assertEqual(latest["ETH/USDT"], "buy")
 
 
 class TestRunOnceOnlyNotifiesOnRealTrade(unittest.TestCase):
