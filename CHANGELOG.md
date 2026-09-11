@@ -422,6 +422,44 @@ istenirse ayrı bir onay adımıyla eklenebilir.
 
 ---
 
+## Faz 7 — MACD ve Bollinger Bantları stratejileri eklendi ✅ Tamamlandı
+
+**Neden:** Faz 6'daki dashboard'dan backtest/walk-forward özelliği ile
+altyapı (backtest, walk-forward, dry-run, risk yönetimi, sinyal görünürlüğü)
+tamamlandı, ama gerçekten test edilecek tek strateji `RsiStrategy` idi.
+Kullanıcının asıl hedefi — "en düşük parayla en iyi stratejiyi hızlıca
+test edip kazandırıyor mu görmek" — birden fazla, birbirinden farklı
+mantıkla çalışan stratejiye ihtiyaç duyuyor; tek stratejiyle karşılaştırma
+yapılamaz.
+
+**Değişen:**
+- `omnitrade/strategies/macd_strategy.py` (**yeni dosya**) — `MacdStrategy`:
+  trend-takip mantığı (RSI/Bollinger'ın aksine mean-reversion değil).
+  Hızlı EMA(12) yavaş EMA(26)'nın üstündeyken BUY, altındayken SELL.
+  Durum bazlı çalışır (RSI ile aynı desen) — `Portfolio.apply_signal`
+  zaten açık pozisyon varken tekrar BUY'u, pozisyon yokken SELL'i no-op
+  geçtiği için tekrarlanan sinyal fazladan işlem açmaz.
+- `omnitrade/strategies/bollinger_strategy.py` (**yeni dosya**) —
+  `BollingerStrategy`: RSI'ye ek ikinci bir mean-reversion referansı,
+  farklı istatistiksel temelle (hareketli ortalama ± N std sapma).
+  Fiyat alt bandın altına inince BUY, üst bandın üstüne çıkınca SELL.
+- `omnitrade/strategies/__init__.py`: her iki strateji `STRATEGIES`
+  sözlüğüne eklendi — `config.yaml`'da `strategy: MacdStrategy` veya
+  `strategy: BollingerStrategy` yazarak ya da `pair_strategies` ile coin
+  bazında seçilebilirler; dashboard'daki "Strateji Test Et" panelinden de
+  `strategy` alanına isim yazılarak backtest'te denenebilirler.
+- `tests/test_strategy.py`: her iki strateji için RSI testleriyle aynı
+  desende testler (yetersiz veri → HOLD, sürdürülen trend/bant ihlali →
+  doğru sinyal, geçersiz parametre → hata). **Toplam: 85 → 93 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Çoklu strateji/coin sonuçlarını tek ekranda
+karşılaştıran bir "leaderboard" paneli — mevcut backtest paneli tek
+strateji×coin kombinasyonunu tek seferde çalıştırıyor. Üç strateji ×
+birkaç coin manuel denendikten sonra bu gerçekten sık kullanılan bir
+akışsa, sıradaki mantıklı adım budur.
+
+---
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı
