@@ -42,6 +42,30 @@
 
   #signalDetail { display: none; margin-top: 16px; }
   #signalDetail.visible { display: block; }
+
+  .backtest-form { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-top: 4px; }
+  .backtest-form label {
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+    color: #9ca3af; text-transform: uppercase; letter-spacing: .03em;
+  }
+  .backtest-form .hint { text-transform: none; color: #4b5563; font-size: 11px; letter-spacing: normal; }
+  .backtest-form input, .backtest-form select {
+    background: #12141a; border: 1px solid #2a2e37; border-radius: 8px;
+    color: #e6e6e6; padding: 8px 10px; font-size: 14px; width: 130px;
+  }
+  .backtest-form button {
+    background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; height: 38px;
+  }
+  .backtest-form button:hover { background: #2563eb; }
+  .backtest-form button:disabled { background: #2a2e37; color: #6b7280; cursor: wait; }
+  .bt-status { margin-top: 10px; font-size: 13px; color: #9ca3af; min-height: 18px; }
+  .bt-status.error { color: #f87171; }
+  .bt-summary { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+  .bt-periods { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  .bt-periods th, .bt-periods td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #2a2e37; font-size: 13px; }
+  .bt-pos { color: #4ade80; }
+  .bt-neg { color: #f87171; }
 </style>
 </head>
 <body>
@@ -68,6 +92,39 @@
       <h2 id="signalDetailTitle">—</h2>
       <canvas id="signalChart"></canvas>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Strateji Test Et (Backtest / Walk-Forward)</h2>
+    <p style="color:#6b7280;font-size:13px;margin-top:-8px;">
+      Geçmiş veriyle stratejiyi anında test et — terminal/kod gerekmez.
+      Varsayılan olarak o coin için şu an canlıda çalışan strateji ve
+      parametreler kullanılır; aşağıdan değiştirip denemeler yapabilirsin,
+      bu canlı config'i etkilemez.
+    </p>
+    <div class="backtest-form">
+      <label>Coin
+        <select id="btSymbol"></select>
+      </label>
+      <label>Mum sayısı
+        <input id="btLimit" type="number" min="50" max="1500" value="1000" />
+      </label>
+      <label>Dönem sayısı (walk-forward)
+        <input id="btSplits" type="number" min="1" max="12" value="4" />
+      </label>
+      <label>RSI periyodu <span class="hint">(boş = canlı ayar)</span>
+        <input id="btPeriod" type="number" min="2" placeholder="örn. 14" />
+      </label>
+      <label>Aşırı satım <span class="hint">(boş = canlı ayar)</span>
+        <input id="btOversold" type="number" min="1" max="49" placeholder="örn. 30" />
+      </label>
+      <label>Aşırı alım <span class="hint">(boş = canlı ayar)</span>
+        <input id="btOverbought" type="number" min="51" max="99" placeholder="örn. 70" />
+      </label>
+      <button id="btRun" type="button">Çalıştır</button>
+    </div>
+    <div id="btStatus" class="bt-status"></div>
+    <div id="btResults"></div>
   </div>
 
   <div class="card">

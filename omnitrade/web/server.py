@@ -11,14 +11,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from omnitrade.backtest import run_backtest, run_walk_forward
 from omnitrade.config import Config
+from omnitrade.exchange import ExchangeClient
 from omnitrade.stats import compute_drawdown_curve, compute_summary_stats
 from omnitrade.storage import Storage
+from omnitrade.strategies import get_strategy
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def make_handler(storage: Storage):
+def make_handler(storage: Storage, config: Config):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # sessiz stdlib logger
             pass
@@ -66,6 +69,114 @@ def make_handler(storage: Storage):
             else:
                 self.send_error(404)
 
+        def do_POST(self):
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/backtest":
+                self._handle_backtest()
+            else:
+                self.send_error(404)
+
+        def _handle_backtest(self):
+            """Faz 6: dashboard'dan tıklamayla backtest/walk-forward çalıştır —
+            önceden bunun için terminalde CSV indirip `cli.py backtest`
+            çağırmak gerekiyordu. Mantık AYNI (`omnitrade/backtest.py`),
+            sadece tetikleme yolu artık HTTP. Borsadan canlı OHLCV çeker
+            (dry-run'daki gibi salt-okunur, emir gönderilmez), bu yüzden
+            birkaç saniye sürebilir — ThreadingHTTPServer sayesinde bu
+            sırada dashboard'un normal GET polling'i bloklanmaz.
+            """
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            symbol = req.get("symbol")
+            if not symbol:
+                self._json({"error": "'symbol' zorunlu."}, status=400)
+                return
+
+            timeframe = req.get("timeframe") or config.timeframe
+            limit = max(50, min(int(req.get("limit") or 1000), 1500))
+            n_splits = max(1, min(int(req.get("walk_forward") or 4), 12))
+
+            # Öncelik: istekte açıkça verilen strateji/params > config.yaml'daki
+            # pair_strategies override'ı > genel config.strategy/strategy_params.
+            # Böylece "şu an canlıda bu coin için ne çalışıyorsa onu test et"
+            # varsayılanı korunur, ama dashboard'dan farklı parametre deneyip
+            # canlı config'e dokunmadan sonucu görebilirsin.
+            pair_override = config.pair_strategies.get(symbol, {})
+            strategy_name = req.get("strategy") or pair_override.get("strategy") or config.strategy
+            params = req.get("params")
+            if params is None:
+                if pair_override.get("strategy") == strategy_name:
+                    params = pair_override.get("params")
+                elif strategy_name == config.strategy:
+                    params = config.strategy_params
+
+            try:
+                strategy = get_strategy(strategy_name, params)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=400)
+                return
+
+            try:
+                exchange = ExchangeClient(config.exchange.name, config.exchange.api_key, config.exchange.api_secret, dry_run=True)
+                df = exchange.fetch_ohlcv_df(symbol, timeframe=timeframe, limit=limit)
+            except Exception as exc:  # noqa: BLE001 - ccxt/ağ çok çeşitli hata tipi fırlatabilir
+                self._json({"error": f"Geçmiş veri çekilemedi: {exc}"}, status=502)
+                return
+
+            try:
+                if n_splits > 1:
+                    results = run_walk_forward(
+                        df, strategy, symbol, n_splits=n_splits,
+                        fee_pct=config.fee_pct, slippage_pct=config.slippage_pct,
+                        risk_config=config.risk,
+                    )
+                else:
+                    results = [run_backtest(
+                        df, strategy, symbol,
+                        fee_pct=config.fee_pct, slippage_pct=config.slippage_pct,
+                        risk_config=config.risk,
+                    )]
+            except Exception as exc:  # noqa: BLE001
+                self._json({"error": f"Backtest çalıştırılamadı: {exc}"}, status=500)
+                return
+
+            if not results:
+                self._json({
+                    "error": "Yeterli veri yok — mum sayısını artır ya da dönem sayısını azalt.",
+                }, status=400)
+                return
+
+            payload = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "candles": len(df),
+                "strategy": strategy_name,
+                "params": params or {},
+                "walk_forward": n_splits,
+                "periods": [
+                    {
+                        "label": r.symbol,
+                        "trades": r.trades,
+                        "total_return_pct": r.total_return_pct,
+                        "win_rate": r.win_rate,
+                        "max_drawdown_pct": r.max_drawdown_pct,
+                    }
+                    for r in results
+                ],
+            }
+            if len(results) > 1:
+                returns = [r.total_return_pct for r in results]
+                payload["avg_return_pct"] = sum(returns) / len(returns)
+                payload["worst_period_pct"] = min(returns)
+                payload["best_period_pct"] = max(returns)
+            self._json(payload)
+
         def _serve_static(self, filename: str, content_type: str):
             file_path = STATIC_DIR / filename
             if not file_path.exists():
@@ -83,7 +194,7 @@ def make_handler(storage: Storage):
 
 def serve(config: Config) -> None:
     storage = Storage(config.db_path)
-    handler = make_handler(storage)
+    handler = make_handler(storage, config)
     server = ThreadingHTTPServer(("0.0.0.0", config.web_port), handler)
     print(f"Dashboard: http://localhost:{config.web_port}")
     try:

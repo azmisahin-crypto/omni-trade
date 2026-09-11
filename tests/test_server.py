@@ -1,0 +1,183 @@
+"""omnitrade/web/server.py için testler.
+
+Önceden bu dosya için hiç test yoktu (stdlib http.server ile elle test
+etmek zahmetli görünüp atlanmıştı). Backtest'i dashboard'a taşıyan Faz 6
+ile birlikte hem yeni /api/backtest hem de var olan GET endpoint'leri
+için temel kapsama ekleniyor — gerçek bir HTTP sunucusu ayrı bir thread'de
+ayağa kaldırılıp gerçek istekler atılıyor (mock request/response değil),
+çünkü stdlib http.server'ın kendi routing/parsing davranışı da test
+edilmiş oluyor.
+"""
+from __future__ import annotations
+
+import json
+import unittest
+from http.server import ThreadingHTTPServer
+from threading import Thread
+from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+import pandas as pd
+
+from omnitrade.config import Config
+from omnitrade.storage import Storage
+from omnitrade.web.server import make_handler
+
+
+def _wavy_df(n: int = 300, amplitude: float = 10.0, base: float = 100.0) -> pd.DataFrame:
+    closes = [base + amplitude * ((i % 40) - 20) / 20 for i in range(n)]
+    return pd.DataFrame({
+        "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": [1.0] * n,
+    })
+
+
+class ServerTestBase(unittest.TestCase):
+    """Her testte in-memory storage + ThreadingHTTPServer'ı gerçek (rastgele)
+    bir portta ayağa kaldırıp testin sonunda düzgünce kapatır."""
+
+    def setUp(self):
+        self.storage = Storage(":memory:")
+        self.config = Config()
+        handler = make_handler(self.storage, self.config)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.port = self.server.server_address[1]
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.storage.close()
+
+    def _url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def _get_json(self, path: str):
+        with urlopen(self._url(path), timeout=5) as resp:
+            return json.loads(resp.read())
+
+    def _post_json(self, path: str, body: dict | None):
+        data = json.dumps(body if body is not None else {}).encode("utf-8")
+        req = Request(self._url(path), data=data, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+
+class TestExistingGetEndpoints(ServerTestBase):
+    def test_index_and_app_js_served(self):
+        with urlopen(self._url("/"), timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn(b"OmniTrade", resp.read())
+        with urlopen(self._url("/app.js"), timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+
+    def test_unknown_path_is_404(self):
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(self._url("/does-not-exist"), timeout=5)
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_empty_db_endpoints_return_sane_defaults(self):
+        self.assertEqual(self._get_json("/api/trades"), [])
+        self.assertEqual(self._get_json("/api/equity"), [])
+        self.assertEqual(self._get_json("/api/signals"), [])
+        stats = self._get_json("/api/stats")
+        self.assertEqual(stats["summary"]["trade_count"], 0)
+        self.assertEqual(stats["drawdown_curve"], [])
+
+    def test_signals_and_history_reflect_logged_data(self):
+        self.storage.log_signal("BTC/USDT", "hold", 65000.0, reason="RSI=50.0")
+        self.storage.log_signal("BTC/USDT", "buy", 64000.0, reason="RSI=28.0")
+        latest = self._get_json("/api/signals")
+        self.assertEqual(len(latest), 1)
+        self.assertEqual(latest[0]["action"], "buy")  # en son sinyal
+        history = self._get_json("/api/signals/history?symbol=BTC%2FUSDT&limit=10")
+        self.assertEqual(len(history), 2)
+
+
+class TestBacktestEndpoint(ServerTestBase):
+    def test_missing_symbol_is_400(self):
+        status, body = self._post_json("/api/backtest", {})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_invalid_json_body_is_400(self):
+        req = Request(self._url("/api/backtest"), data=b"{not json", method="POST")
+        try:
+            urlopen(req, timeout=5)
+            self.fail("400 bekleniyordu")
+        except HTTPError as exc:
+            self.assertEqual(exc.code, 400)
+
+    def test_unknown_strategy_is_400(self):
+        status, body = self._post_json("/api/backtest", {"symbol": "BTC/USDT", "strategy": "NoSuchStrategy"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_exchange_error_is_502(self, mock_exchange_cls):
+        mock_exchange_cls.return_value.fetch_ohlcv_df.side_effect = RuntimeError("ağ hatası")
+        status, body = self._post_json("/api/backtest", {"symbol": "BTC/USDT"})
+        self.assertEqual(status, 502)
+        self.assertIn("error", body)
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_single_backtest_default_walk_forward_off(self, mock_exchange_cls):
+        # walk_forward=1 -> tek dönem, run_backtest kullanılır (run_walk_forward değil)
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df()
+        status, body = self._post_json("/api/backtest", {
+            "symbol": "BTC/USDT", "walk_forward": 1, "limit": 300,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["symbol"], "BTC/USDT")
+        self.assertEqual(body["walk_forward"], 1)
+        self.assertEqual(len(body["periods"]), 1)
+        self.assertNotIn("avg_return_pct", body)  # tek dönemde özet alanları eklenmez
+        period = body["periods"][0]
+        self.assertIn("total_return_pct", period)
+        self.assertIn("win_rate", period)
+        self.assertIn("max_drawdown_pct", period)
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_walk_forward_multi_period_summary(self, mock_exchange_cls):
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df(n=600)
+        status, body = self._post_json("/api/backtest", {
+            "symbol": "BTC/USDT", "walk_forward": 4, "limit": 600,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["periods"]), 4)
+        self.assertIn("avg_return_pct", body)
+        self.assertIn("worst_period_pct", body)
+        self.assertIn("best_period_pct", body)
+        self.assertLessEqual(body["worst_period_pct"], body["avg_return_pct"])
+        self.assertGreaterEqual(body["best_period_pct"], body["avg_return_pct"])
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_pair_strategies_override_used_by_default(self, mock_exchange_cls):
+        # Faz 4 pair_strategies override'ı backtest endpoint'inde de
+        # varsayılan olarak kullanılmalı (canlıda ne çalışıyorsa onu test et).
+        self.config.pair_strategies = {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}}
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df()
+        status, body = self._post_json("/api/backtest", {"symbol": "ETH/USDT", "walk_forward": 1})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["params"], {"period": 21})
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_explicit_params_override_pair_strategies(self, mock_exchange_cls):
+        self.config.pair_strategies = {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}}
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df()
+        status, body = self._post_json("/api/backtest", {
+            "symbol": "ETH/USDT", "walk_forward": 1,
+            "params": {"period": 9, "oversold": 20, "overbought": 80},
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["params"]["period"], 9)
+
+
+if __name__ == "__main__":
+    unittest.main()

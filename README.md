@@ -70,6 +70,10 @@ Strateji dönemler arasında tutarlı sonuç veriyorsa (hepsi pozitif ya da
 en azından aynı yönde), tek dönemlik backtest'e göre daha güvenilir bir
 sinyal. `N>=2` olmalı ve yeterli veri yoksa uyarı verip çıkar.
 
+**Alternatif — terminale hiç dokunmadan:** dashboard'daki "Strateji Test
+Et" panelinden aynı walk-forward'ı çalıştırabilirsin (bkz. aşağıdaki
+Dashboard bölümü) — CSV indirmen gerekmez, borsadan canlı veri çeker.
+
 ## 2. Dry-run — gerçek zamanlı ama sahte para ile
 
 `config/config.yaml`'da `dry_run: true` (varsayılan zaten böyle):
@@ -107,6 +111,18 @@ Dashboard artık şunları da gösterir:
   oranı, kapanan işlem sayısı, max drawdown (`/api/stats`,
   `omnitrade/stats.py`). Kazanma oranı hesabı `buy_blocked` gibi
   gerçekleşmemiş kayıtları hariç tutar.
+- **Strateji Test Et (Backtest / Walk-Forward)**: coin seç, mum sayısı ve
+  dönem sayısını gir, "Çalıştır"a bas — terminale hiç dokunmadan borsadan
+  canlı geçmiş veri çekip walk-forward backtest çalıştırır ve sonucu
+  (dönem başına getiri/kazanma oranı/max drawdown + ortalama/en iyi/en
+  kötü dönem) tabloda gösterir. Varsayılan olarak o coin için o an canlıda
+  çalışan strateji/parametreleri kullanır (`pair_strategies` override'ı
+  dahil); RSI periyodu/eşiklerini formdan değiştirip deneme yapabilirsin,
+  bu canlı config'i **etkilemez** — sadece o tek isteğe özel. Aynı mantığı
+  `omnitrade/backtest.py` sağlıyor (CLI'daki `backtest` komutuyla birebir
+  aynı kod), sadece tetikleme yolu artık `POST /api/backtest`. Borsadan
+  veri çekmek birkaç saniye sürebilir; bu sırada dashboard'un normal
+  yenilenmesi bloklanmaz (`ThreadingHTTPServer`).
 
 ## 4. Telegram bildirimleri
 
@@ -225,13 +241,14 @@ için bilinçli bir tasarım tercihi).
 python -m unittest discover -s tests -v
 ```
 
-73 test şu an hazır (strateji sinyalleri, risk yönetimi, portföy al/sat
+85 test şu an hazır (strateji sinyalleri, risk yönetimi, portföy al/sat
 mantığı + komisyon/slippage, backtest uçtan uca + risk entegrasyonu +
 walk-forward, config yükleme, canlı-emir güvenlik freni (gerçek bakiye
 dahil), healthcheck script'i, sinyal loglama, özet istatistik/drawdown,
-coin başına strateji override) — hepsi ağdan bağımsız, saniyeler içinde
-çalışır. CI'da (`.github/workflows/tests.yml`) her push/PR'da otomatik
-çalışır.
+coin başına strateji override, dashboard HTTP endpoint'leri — backtest
+dahil) — hepsi ağdan bağımsız (borsa çağrıları mock'lanır), saniyeler
+içinde çalışır. CI'da (`.github/workflows/tests.yml`) her push/PR'da
+otomatik çalışır.
 
 ## Geliştirme geçmişi
 

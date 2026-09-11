@@ -371,6 +371,57 @@ sözdizimi açısından ve mantık okuması ile doğrulandı.
 
 ---
 
+## Faz 6 — dashboard'dan backtest/walk-forward çalıştırma ✅ Tamamlandı
+
+**Neden:** Kullanıcı canlı dashboard'ı gördükten sonra haklı bir soru
+sordu: "veriyi zaten veritabanına kaydediyoruz, backtest için niye hâlâ
+terminalde CSV indirip komut yazmam gerekiyor — bunu da UI'dan yapsak
+olmaz mı?" Cevap: sinyal tablosundaki veri sadece botun ayakta olduğu
+süre kadar geriye gidiyor (walk-forward için yetersiz), asıl ihtiyaç
+borsadan geçmiş veri çekip backtest'i **tetiklemenin** terminal
+gerektirmemesiydi — veri kaynağı değil, arayüz sorunuydu.
+
+**Değişen:**
+- `omnitrade/web/server.py`: yeni `POST /api/backtest` endpoint'i. İstek
+  gövdesi `{symbol, timeframe?, limit?, walk_forward?, strategy?,
+  params?}`; borsadan `ExchangeClient.fetch_ohlcv_df` ile canlı OHLCV
+  çeker, `omnitrade/backtest.py`'deki `run_backtest`/`run_walk_forward`'ı
+  (CLI'daki `backtest` komutuyla BİREBİR AYNI kod, kopyalanmadı) çalıştırır.
+  Varsayılan strateji/parametre önceliği: istekte açıkça verilen >
+  `config.pair_strategies[symbol]` > genel `config.strategy`. Hatalar
+  (eksik symbol, geçersiz JSON, bilinmeyen strateji, borsa/ağ hatası,
+  yetersiz veri) uygun HTTP status'la (400/502/500) JSON hata mesajı
+  döner. `serve()`/`make_handler()` artık `config`'i de alıyor (önceden
+  sadece `storage` alıyordu) — backtest için `config.exchange`,
+  `config.risk`, `config.fee_pct`/`slippage_pct` gerekiyor.
+- `omnitrade/web/static/index.html` + `app.js`: "Strateji Test Et"
+  paneli — coin seçimi (sinyal panelindeki coinlerden otomatik dolar),
+  mum sayısı, dönem sayısı, opsiyonel RSI parametre override'ları,
+  "Çalıştır" butonu; sonuç dönem başına tablo + (çok dönemliyse)
+  ortalama/en iyi/en kötü özet kartları olarak gösteriliyor. İstek
+  sürerken buton disable edilip durum mesajı gösteriliyor (borsadan veri
+  çekmek birkaç saniye sürebilir).
+- `tests/test_server.py` (**yeni dosya**): `server.py` için önceden hiç
+  test yoktu — gerçek bir `ThreadingHTTPServer`'ı ayrı thread'de rastgele
+  bir portta ayağa kaldırıp gerçek HTTP istekleri atan 12 test eklendi.
+  Hem yeni backtest endpoint'i (başarılı tek/çoklu dönem, eksik symbol,
+  bozuk JSON, bilinmeyen strateji, borsa hatası, `pair_strategies`
+  override önceliği) hem de önceden test edilmemiş var olan GET
+  endpoint'leri (`/`, `/app.js`, `/api/trades`, `/api/equity`,
+  `/api/signals`, `/api/signals/history`, `/api/stats`, 404) kapsandı.
+  Borsa çağrıları `omnitrade.web.server.ExchangeClient`
+  mock'lanarak test ediliyor, gerçek ağ/API anahtarı gerekmiyor.
+- **Toplam: 73 → 85 test.**
+
+**Kasıtlı olarak yapılMAYAN:** strateji parametrelerini dashboard'dan
+kaydedip canlı config'i değiştirmek (yani "backtest sonucu iyiyse tek
+tıkla canlıya uygula"). Bu bilinçli bir sınır: backtest sonucunu görüp
+config.yaml'ı elle güncellemek, yanlışlıkla/aceleyle canlı stratejiyi
+değiştirmeye karşı bir sürtünme katmanı olarak kalsın istendi. İleride
+istenirse ayrı bir onay adımıyla eklenebilir.
+
+---
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

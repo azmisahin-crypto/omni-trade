@@ -106,7 +106,113 @@ async function refreshSignals() {
     div.addEventListener("click", () => selectSymbol(s.symbol));
     grid.appendChild(div);
   }
+  populateBacktestSymbols(signals.map(s => s.symbol));
 }
+
+// --- Faz 6: dashboard'dan backtest/walk-forward ---
+
+function populateBacktestSymbols(symbols) {
+  const select = document.getElementById("btSymbol");
+  const current = select.value;
+  const existing = new Set(Array.from(select.options).map(o => o.value));
+  const incoming = new Set(symbols);
+  // Sadece fark varsa yeniden kur — her poll'da select'i sıfırlamak
+  // kullanıcının açık dropdown'ını/seçimini bozar.
+  const same = existing.size === incoming.size && [...existing].every(v => incoming.has(v));
+  if (same) return;
+  select.innerHTML = "";
+  for (const sym of symbols) {
+    const opt = document.createElement("option");
+    opt.value = sym;
+    opt.textContent = sym;
+    select.appendChild(opt);
+  }
+  if (symbols.includes(current)) select.value = current;
+  else if (selectedSymbol && symbols.includes(selectedSymbol)) select.value = selectedSymbol;
+}
+
+function fmtPct(v) {
+  const cls = v >= 0 ? "bt-pos" : "bt-neg";
+  return `<span class="${cls}">${v >= 0 ? "+" : ""}${v.toFixed(2)}%</span>`;
+}
+
+async function runBacktest() {
+  const symbol = document.getElementById("btSymbol").value;
+  const status = document.getElementById("btStatus");
+  const results = document.getElementById("btResults");
+  const button = document.getElementById("btRun");
+  if (!symbol) {
+    status.textContent = "Önce bir coin seç (üstteki sinyal panelinde henüz coin görünmüyorsa bot henüz sinyal üretmemiştir).";
+    status.classList.add("error");
+    return;
+  }
+
+  const body = {
+    symbol,
+    limit: parseInt(document.getElementById("btLimit").value, 10) || 1000,
+    walk_forward: parseInt(document.getElementById("btSplits").value, 10) || 4,
+  };
+  const period = document.getElementById("btPeriod").value;
+  const oversold = document.getElementById("btOversold").value;
+  const overbought = document.getElementById("btOverbought").value;
+  if (period || oversold || overbought) {
+    body.params = {};
+    if (period) body.params.period = parseInt(period, 10);
+    if (oversold) body.params.oversold = parseInt(oversold, 10);
+    if (overbought) body.params.overbought = parseInt(overbought, 10);
+  }
+
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = `${symbol} için geçmiş veri çekiliyor ve test ediliyor... (birkaç saniye sürebilir)`;
+  results.innerHTML = "";
+
+  try {
+    const res = await fetch("/api/backtest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = data.error || `Hata (HTTP ${res.status})`;
+      status.classList.add("error");
+      return;
+    }
+
+    status.textContent = `${data.symbol} — ${data.candles} mum (${data.timeframe}), strateji: ${data.strategy}, ${data.periods.length} dönem.`;
+
+    let html = "";
+    if (data.avg_return_pct !== undefined) {
+      html += `<div class="bt-summary">
+        <div class="stat"><div class="label">Ortalama Getiri</div><div class="value">${fmtPct(data.avg_return_pct)}</div></div>
+        <div class="stat"><div class="label">En Kötü Dönem</div><div class="value">${fmtPct(data.worst_period_pct)}</div></div>
+        <div class="stat"><div class="label">En İyi Dönem</div><div class="value">${fmtPct(data.best_period_pct)}</div></div>
+      </div>`;
+    }
+    html += `<table class="bt-periods"><thead><tr>
+      <th>Dönem</th><th>İşlem</th><th>Getiri</th><th>Kazanma Oranı</th><th>Max Drawdown</th>
+    </tr></thead><tbody>`;
+    for (const p of data.periods) {
+      html += `<tr>
+        <td>${p.label}</td>
+        <td>${p.trades}</td>
+        <td>${fmtPct(p.total_return_pct)}</td>
+        <td>${(p.win_rate * 100).toFixed(1)}%</td>
+        <td>${p.max_drawdown_pct.toFixed(2)}%</td>
+      </tr>`;
+    }
+    html += "</tbody></table>";
+    results.innerHTML = html;
+  } catch (err) {
+    status.textContent = `İstek başarısız: ${err}`;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("btRun").addEventListener("click", runBacktest);
 
 async function selectSymbol(symbol) {
   selectedSymbol = symbol;
