@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from omnitrade.portfolio import Portfolio
+from omnitrade.risk import RiskConfig
 from omnitrade.storage import Storage
 from omnitrade.strategies.base import Action, Signal
 
@@ -12,7 +13,13 @@ class TestPortfolio(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self.tmpdir.name) / "test.db")
         self.storage = Storage(self.db_path)
-        self.portfolio = Portfolio(self.storage, starting_balance=1000.0, stake_fraction=0.5)
+        # fee/slippage sıfırlanmış: bu testlerde saf pozisyon mantığını izole ediyoruz.
+        # Komisyon/slippage davranışı test_portfolio_costs.py'de ayrıca test ediliyor.
+        risk = RiskConfig(max_position_pct=0.5, max_open_positions=5, stop_loss_pct=0.0)
+        self.portfolio = Portfolio(
+            self.storage, starting_balance=1000.0, risk_config=risk,
+            fee_pct=0.0, slippage_pct=0.0,
+        )
 
     def tearDown(self):
         self.storage.close()
@@ -42,6 +49,97 @@ class TestPortfolio(unittest.TestCase):
         equity = self.portfolio.equity({"BTC/USDT": 150.0})
         # 500 nakit + 5 * 150 = 1250
         self.assertAlmostEqual(equity, 1250.0)
+
+
+class TestPortfolioCosts(unittest.TestCase):
+    """Komisyon ve slippage'ın gerçekten balance/qty'e yansıdığını doğrular."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self.tmpdir.name) / "test.db")
+        self.storage = Storage(self.db_path)
+        risk = RiskConfig(max_position_pct=0.5, stop_loss_pct=0.0)
+        self.portfolio = Portfolio(
+            self.storage, starting_balance=1000.0, risk_config=risk,
+            fee_pct=0.01, slippage_pct=0.01,
+        )
+
+    def tearDown(self):
+        self.storage.close()
+        self.tmpdir.cleanup()
+
+    def test_buy_applies_slippage_and_fee(self):
+        # stake = 500, fill_price = 100 * 1.01 = 101, qty = (500*0.99)/101
+        self.portfolio.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        pos = self.portfolio.positions["BTC/USDT"]
+        self.assertAlmostEqual(pos.entry_price, 101.0)
+        expected_qty = (500 * 0.99) / 101.0
+        self.assertAlmostEqual(pos.qty, expected_qty)
+
+    def test_sell_applies_slippage_and_fee_and_reduces_proceeds(self):
+        self.portfolio.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        qty = self.portfolio.positions["BTC/USDT"].qty
+        self.portfolio.apply_signal(Signal(Action.SELL, "BTC/USDT"), price=100.0)
+        # satış fill fiyatı 100 * 0.99 = 99, komisyon %1 daha düşer
+        expected_proceeds = qty * 99.0 * 0.99
+        self.assertAlmostEqual(self.portfolio.balance, 500.0 + expected_proceeds)
+
+
+class TestPortfolioRisk(unittest.TestCase):
+    """Risk yönetimi: max açık pozisyon, stop-loss/take-profit, günlük kill-switch."""
+
+    def _make_portfolio(self, risk: RiskConfig, balance: float = 1000.0) -> Portfolio:
+        storage = Storage(self.db_path)
+        self.addCleanup(storage.close)
+        return Portfolio(storage, starting_balance=balance, risk_config=risk, fee_pct=0.0, slippage_pct=0.0)
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self.tmpdir.name) / "test.db")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_max_open_positions_blocks_new_buy(self):
+        risk = RiskConfig(max_position_pct=0.1, max_open_positions=1, stop_loss_pct=0.0)
+        p = self._make_portfolio(risk)
+        p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        p.apply_signal(Signal(Action.BUY, "ETH/USDT"), price=100.0)
+        self.assertNotIn("ETH/USDT", p.positions)
+        self.assertIn("BTC/USDT", p.positions)
+
+    def test_stop_loss_force_closes_position(self):
+        risk = RiskConfig(max_position_pct=0.5, stop_loss_pct=0.05)
+        p = self._make_portfolio(risk)
+        p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        # fiyat %6 düştü -> stop-loss (%5) tetiklenmeli
+        p.check_risk_exits({"BTC/USDT": 94.0})
+        self.assertNotIn("BTC/USDT", p.positions)
+
+    def test_take_profit_force_closes_position(self):
+        risk = RiskConfig(max_position_pct=0.5, stop_loss_pct=0.0, take_profit_pct=0.1)
+        p = self._make_portfolio(risk)
+        p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        p.check_risk_exits({"BTC/USDT": 111.0})
+        self.assertNotIn("BTC/USDT", p.positions)
+
+    def test_no_exit_when_within_thresholds(self):
+        risk = RiskConfig(max_position_pct=0.5, stop_loss_pct=0.05, take_profit_pct=0.1)
+        p = self._make_portfolio(risk)
+        p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        p.check_risk_exits({"BTC/USDT": 103.0})
+        self.assertIn("BTC/USDT", p.positions)
+
+    def test_daily_kill_switch_blocks_new_positions(self):
+        risk = RiskConfig(max_position_pct=0.5, stop_loss_pct=0.0, max_daily_loss_pct=0.1)
+        p = self._make_portfolio(risk, balance=1000.0)
+        # Günlük baseline'ı elle 1000 olarak ayarla, sonra equity'yi %15 düşür
+        p.risk.update_daily_baseline(1000.0, ts=0)
+        p.risk.check_kill_switch(850.0)
+        self.assertTrue(p.risk.kill_switch_active)
+
+        p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        self.assertNotIn("BTC/USDT", p.positions)
 
 
 if __name__ == "__main__":

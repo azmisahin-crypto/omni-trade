@@ -19,8 +19,19 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss.replace(0, 1e-9)
-    return 100 - (100 / (1 + rs))
+
+    # Kenar durum: fiyat tamamen sabitse (avg_gain=0 ve avg_loss=0) RS 0/0
+    # belirsizdir. Eskiden bu durumda rs=0 hesaplanıyor, bu da RSI=0 (yanlışlıkla
+    # "aşırı satım" -> sahte BUY sinyali) üretiyordu. Doğrusu: hareket yoksa
+    # RSI nötr (50) olmalı.
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    result = 100 - (100 / (1 + rs))
+    both_zero = (avg_gain == 0) & (avg_loss == 0)
+    result = result.where(~both_zero, 50.0)
+    # avg_loss=0 ama avg_gain>0 ise gerçek bir aşırı-alım durumu: RSI=100
+    only_gain = (avg_loss == 0) & (avg_gain > 0)
+    result = result.where(~only_gain, 100.0)
+    return result
 
 
 class RsiStrategy(Strategy):

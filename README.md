@@ -95,11 +95,20 @@ docker compose up -d --build
 
 ## ⚠️ Canlıya geçmeden önce
 
-- `engine.py` içindeki `_live_order_qty` metodu bilerek boş bırakıldı
-  (`NotImplementedError`) — gerçek risk/pozisyon büyüklüğü mantığını sen
-  yazana kadar `dry_run: false` yapılamaz. Bu bilinçli bir güvenlik freni.
+- `engine.py` içindeki `_live_order_qty` artık `RiskManager` üzerinden gerçek
+  bir hesaplama yapıyor, ama `config.yaml`'da `live_trading_confirmed: true`
+  set etmeden çalışmaz — `dry_run: false` yapmak TEK BAŞINA yeterli değil,
+  bu ikinci bir bilinçli onay adımı. Ayrıca şu anki implementasyon gerçek
+  borsa bakiyeni değil `dry_run_wallet` değerini baz alıyor — canlıya
+  geçmeden önce bunu gerçek bakiye çekecek şekilde tamamlamalısın (kod
+  içindeki yorumda detay var).
+- `risk:` bölümünde `max_position_pct`, `max_open_positions`,
+  `stop_loss_pct`, `take_profit_pct`, `max_daily_loss_pct` ayarlarını
+  ihtiyacına göre gözden geçir — varsayılanlar güvenli tarafta ama körü
+  körüne güvenme.
 - Gerçek para öncesi en az birkaç hafta dry-run'da pozitif sonuç görmeden
-  canlıya geçme.
+  canlıya geçme, tercihen farklı piyasa koşullarında (yükseliş/düşüş/yatay).
+- Detaylı yol haritası ve gerekçeler için `CHANGELOG.md`'ye bak.
 
 ## Testler
 
@@ -107,8 +116,15 @@ docker compose up -d --build
 python -m unittest discover -s tests -v
 ```
 
-8 test şu an hazır (strateji sinyalleri, portföy al/sat mantığı, backtest
-uçtan uca) — hepsi ağdan bağımsız, saniyeler içinde çalışır.
+29 test şu an hazır (strateji sinyalleri, risk yönetimi, portföy al/sat
+mantığı + komisyon/slippage, backtest uçtan uca ve farklı piyasa rejimleri)
+— hepsi ağdan bağımsız, saniyeler içinde çalışır.
+
+## Geliştirme geçmişi
+
+Projede yapılan geliştirmeler faz faz `CHANGELOG.md` dosyasında
+belgeleniyor — her fazın neden yapıldığı, hangi dosyaların değiştiği ve
+sırada ne olduğu orada.
 
 ## Lisans
 
