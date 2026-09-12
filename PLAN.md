@@ -19,4 +19,4 @@ Bu dosya, projenin doğuşundan itibaren her fazın **hangi motivasyonla**, **ha
 | **9** | Çoklu Strateji × Coin Karşılaştırma (Leaderboard) | ✅ Tamamlandı | Bu commit |
 | **10** | Coin Listesini UI'dan Ekle/Çıkar | ✅ Tamamlandı | Bu commit |
 | **11** | Tek Tıkla Dry-Run Config Uygulama | ✅ Tamamlandı | Bu commit |
-| **12** | Görsel / UX Cilası | ⏳ Sırada | - |
+| **12** | Görsel / UX Cilası | ✅ Tamamlandı | Bu commit |

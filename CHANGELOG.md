@@ -637,6 +637,64 @@ dashboard'un dışında tutuyor — canlıda hâlâ elle `config.yaml` + bilinç
 bir restart gerekiyor, tıpkı `live_trading_confirmed` bayrağındaki gibi
 kasıtlı bir sürtünme.
 
+## Faz 12 — Görsel/UX cilası ✅ Tamamlandı
+
+**Neden:** Faz 6-11 dashboard'a hızlıca çok fonksiyon ekledi (backtest,
+leaderboard, coin yönetimi, tek tıkla uygula) ama görsel/UX tarafı hiç
+elden geçirilmedi: sayfa çok uzadı ve gezinme yoktu, işlem/coin
+listeleri boşken çıplak/garip görünüyordu, bir aksiyonun başarılı olup
+olmadığını anlamak için mutlaka o panelin altındaki küçük durum
+metnine bakmak gerekiyordu (kullanıcı scroll'ladıysa kaçırıyordu), ve
+dashboard'un hâlâ ayakta olup olmadığını (10sn'lik poll döngüsü
+sessizce başarısız olursa) anlamanın hiçbir yolu yoktu. Bu faz kod
+mantığına dokunmadan (hiçbir API/endpoint değişmedi) sadece
+`index.html` + `app.js`'i bu açılardan cilalıyor.
+
+**Değişen — sadece `omnitrade/web/static/index.html` ve `app.js`:**
+
+- **Sabit üst bar + bölüm navigasyonu:** başlığın yanına canlı durum
+  rozeti eklendi (yeşil nabız = son poll başarılı + saat, sarı/durgun =
+  bağlantı sorunu); altında sekiz karta (`#overview`, `#pairs`,
+  `#signals`, `#backtest`, `#leaderboard`, `#equity`, `#drawdown`,
+  `#trades`) atlayan yapışkan bir gezinme çubuğu var; `IntersectionObserver`
+  ile hangi kart görünürdeyse ilgili bağlantı otomatik vurgulanıyor
+  (scrollspy).
+- **Toast bildirimleri (`showToast`)**: coin ekle/çıkar ve backtest
+  sonucunu uygula/kaldır işlemlerinde, panelin altındaki mevcut durum
+  metnine ek olarak sağ üstte kısa süreli bir bildirim de gösteriliyor
+  — kullanıcı sayfanın başka bir yerindeyse de sonucu kaçırmıyor.
+- **Boş durumlar:** hiç sinyal/işlem yokken (bot henüz ilk döngüsünü
+  tamamlamadıysa) artık çıplak boş tablo/grid yerine açıklayıcı bir
+  mesaj gösteriliyor ("Henüz sinyal üretilmedi", "Henüz kapanmış işlem
+  yok").
+- **Skeleton yükleme:** özet istatistik kartları ilk yüklenene kadar
+  "–" yerine hafif bir shimmer animasyonu gösteriyor, veri gelince
+  otomatik kayboluyor.
+- **Yeni işlem vurgusu:** işlemler tablosunun tepesine yeni bir kayıt
+  eklendiğinde (poll döngüsünde tespit edilir) o satır kısa süreliğine
+  arka plan rengiyle vurgulanıp (flash) normale dönüyor.
+- **Genel görsel düzen:** renkler CSS custom property'lerine taşındı
+  (tutarlılık ve okunabilirlik için), kartlara hover'da hafif gölge/
+  kenarlık değişimi eklendi, tablolar dar ekranlarda yatay kaydırılabilir
+  sarmalayıcıya alındı, `@media (max-width: 640px)` ile mobilde
+  form alanları tam genişliğe, istatistik kartları 2 sütuna düşüyor,
+  favicon eklendi (harici dosya gerekmeden data-URI emoji), odaklanma
+  (`:focus-visible`) stilleri ve sinyal kartlarına klavye erişimi
+  (tab + Enter/Space ile seçilebilir) eklendi.
+- **Kasıtlı olarak değişMEyen:** hiçbir element id'si, event listener
+  bağlanma şekli veya API çağrısı değişmedi — bu tamamen görsel/UX katmanı,
+  mevcut testler (özellikle `test_server.py::test_index_and_app_js_served`)
+  değişikliksiz geçiyor. Test sayısı bu fazda sabit kaldı (129), çünkü
+  saf front-end cilası; proje şu ana kadar JS/HTML için ayrı bir test
+  altyapısı kurmadı (stdlib tabanlı test paketi backend odaklı).
+
+**Kasıtlı olarak yapılMAYAN:** Sayfayı çok sayfalı bir yapıya bölmek
+veya bir frontend framework'üne geçmek. Dashboard hâlâ tek bir
+`index.html` + `app.js` çifti, stdlib `http.server` ile sıfır ekstra
+bağımlılıkla serviliyor — projenin "ağır bağımlılık yok" ilkesini
+(bkz. README) bozacak bir framework geçişi bu fazın kapsamı dışında
+tutuldu.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

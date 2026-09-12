@@ -26,6 +26,56 @@ function actionLabel(action) {
   return "HOLD";
 }
 
+// --- Faz 12: görsel/UX cilası — küçük paylaşılan yardımcılar ---
+// Toast bildirimleri, canlı durum rozeti, iskelet (skeleton) temizleme ve
+// boş durum mesajları burada toplanıyor; her biri mevcut fonksiyonlardan
+// (refreshStats/refreshSignals/refreshTrades/vb.) çağrılıyor, hiçbiri
+// mevcut element id'lerini veya event akışını değiştirmiyor.
+
+function showToast(message, type = "info") {
+  const stack = document.getElementById("toastStack");
+  if (!stack || !message) return;
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  stack.appendChild(toast);
+  const remove = () => {
+    toast.classList.add("leaving");
+    setTimeout(() => toast.remove(), 200);
+  };
+  setTimeout(remove, 4000);
+  toast.addEventListener("click", remove);
+}
+
+function setStatus(elId, message, type) {
+  // type: "error" | "success" | undefined (nötr)
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("error", type === "error");
+  el.classList.toggle("success", type === "success");
+}
+
+let lastRefreshOk = null;
+function setLiveStatus(ok) {
+  const dot = document.getElementById("liveDot");
+  const text = document.getElementById("liveStatusText");
+  if (!dot || !text) return;
+  if (ok) {
+    dot.classList.remove("stale");
+    text.textContent = `canlı · son güncelleme ${new Date().toLocaleTimeString()}`;
+  } else {
+    dot.classList.add("stale");
+    text.textContent = "bağlantı sorunu — tekrar deneniyor…";
+  }
+  if (lastRefreshOk === false && ok) showToast("Bağlantı yeniden kuruldu.", "success");
+  lastRefreshOk = ok;
+}
+
+function clearSkeleton(...ids) {
+  for (const id of ids) document.getElementById(id)?.classList.remove("skeleton");
+}
+
 async function refreshStats() {
   const data = await fetchJSON("/api/stats");
   const s = data.summary;
@@ -35,6 +85,7 @@ async function refreshStats() {
   document.getElementById("statWinRate").textContent = `${(s.win_rate * 100).toFixed(1)}%`;
   document.getElementById("statDrawdown").textContent = `${s.max_drawdown_pct.toFixed(2)}%`;
   document.getElementById("statTradeCount").textContent = s.trade_count;
+  clearSkeleton("statReturn", "statWinRate", "statDrawdown", "statTradeCount");
 
   const labels = data.drawdown_curve.map(d => new Date(d.ts * 1000).toLocaleString());
   const values = data.drawdown_curve.map(d => -d.drawdown_pct);
@@ -72,11 +123,30 @@ async function refreshEquity() {
   }
 }
 
+// Faz 12: en son bilinen ilk işlemin zaman damgası — yeni bir işlem
+// geldiğinde (poll döngüsünde tepedeki satır değiştiğinde) o satırı kısa
+// süreliğine vurgulamak (flash) için kullanılıyor.
+let lastTopTradeTs = null;
+
+function emptyStateRow(colspan, icon, message) {
+  const tr = document.createElement("tr");
+  tr.className = "empty-row";
+  tr.innerHTML = `<td colspan="${colspan}">${icon} ${message}</td>`;
+  return tr;
+}
+
 async function refreshTrades() {
   const trades = await fetchJSON("/api/trades");
   const tbody = document.querySelector("#tradesTable tbody");
   tbody.innerHTML = "";
-  for (const t of trades) {
+
+  if (!trades.length) {
+    tbody.appendChild(emptyStateRow(6, "🕓", "Henüz kapanmış işlem yok — bot sinyal ürettikçe burada listelenecek."));
+    lastTopTradeTs = null;
+    return;
+  }
+
+  trades.forEach((t, i) => {
     const tr = document.createElement("tr");
     const time = new Date(t.ts * 1000).toLocaleString();
     tr.innerHTML = `
@@ -86,17 +156,33 @@ async function refreshTrades() {
       <td>${t.price.toFixed(4)}</td>
       <td>${t.qty.toFixed(6)}</td>
       <td>${t.reason ?? ""}</td>`;
+    if (i === 0 && lastTopTradeTs !== null && t.ts !== lastTopTradeTs) {
+      tr.classList.add("flash-new");
+      setTimeout(() => tr.classList.remove("flash-new"), 2500);
+    }
     tbody.appendChild(tr);
-  }
+  });
+  lastTopTradeTs = trades[0].ts;
 }
 
 async function refreshSignals() {
   const signals = await fetchJSON("/api/signals");
   const grid = document.getElementById("signalGrid");
   grid.innerHTML = "";
+
+  if (!signals.length) {
+    const div = document.createElement("div");
+    div.className = "empty-state";
+    div.innerHTML = `<span class="big">📡</span>Henüz sinyal üretilmedi.<br>Bot ilk döngüsünü tamamladığında coinler burada görünecek.`;
+    grid.appendChild(div);
+    populateBacktestSymbols([]);
+    return;
+  }
+
   for (const s of signals) {
     const div = document.createElement("div");
     div.className = "signal-card" + (s.symbol === selectedSymbol ? " selected" : "");
+    div.tabIndex = 0;
     div.innerHTML = `
       <div class="symbol">${s.symbol}</div>
       <div class="badge ${s.action}">${actionLabel(s.action)}</div>
@@ -104,6 +190,9 @@ async function refreshSignals() {
       <div class="reason">${s.reason ?? ""}</div>
       <div class="ago">${timeAgo(s.ts)}</div>`;
     div.addEventListener("click", () => selectSymbol(s.symbol));
+    div.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectSymbol(s.symbol); }
+    });
     grid.appendChild(div);
   }
   populateBacktestSymbols(signals.map(s => s.symbol));
@@ -133,9 +222,7 @@ async function refreshPairChips() {
 }
 
 function setPairStatus(message, isError) {
-  const status = document.getElementById("pairStatus");
-  status.textContent = message;
-  status.classList.toggle("error", !!isError);
+  setStatus("pairStatus", message, isError ? "error" : "success");
 }
 
 async function postPairAction(symbol, action) {
@@ -159,9 +246,11 @@ async function addPair() {
     const data = await postPairAction(symbol, "add");
     input.value = "";
     setPairStatus(data.message, false);
+    showToast(`${symbol} eklendi. ${data.message}`, "success");
     await refreshPairChips();
   } catch (err) {
     setPairStatus(err.message, true);
+    showToast(err.message, "error");
   } finally {
     button.disabled = false;
   }
@@ -172,9 +261,11 @@ async function removePair(symbol, chipEl) {
   try {
     const data = await postPairAction(symbol, "remove");
     setPairStatus(data.message, false);
+    showToast(`${symbol} kaldırıldı. ${data.message}`, "success");
     await refreshPairChips();
   } catch (err) {
     setPairStatus(err.message, true);
+    showToast(err.message, "error");
     chipEl.querySelector("button").disabled = false;
   }
 }
@@ -283,8 +374,7 @@ async function runBacktest() {
   const results = document.getElementById("btResults");
   const button = document.getElementById("btRun");
   if (!symbol) {
-    status.textContent = "Önce bir coin seç (üstteki sinyal panelinde henüz coin görünmüyorsa bot henüz sinyal üretmemiştir).";
-    status.classList.add("error");
+    setStatus("btStatus", "Önce bir coin seç (üstteki sinyal panelinde henüz coin görünmüyorsa bot henüz sinyal üretmemiştir).", "error");
     return;
   }
 
@@ -301,8 +391,7 @@ async function runBacktest() {
   }
 
   button.disabled = true;
-  status.classList.remove("error");
-  status.textContent = `${symbol} için geçmiş veri çekiliyor ve test ediliyor... (birkaç saniye sürebilir)`;
+  setStatus("btStatus", `${symbol} için geçmiş veri çekiliyor ve test ediliyor... (birkaç saniye sürebilir)`);
   results.innerHTML = "";
   lastBacktestApply = null;
   document.getElementById("btApplyStatus").textContent = "";
@@ -316,12 +405,11 @@ async function runBacktest() {
     });
     const data = await res.json();
     if (!res.ok) {
-      status.textContent = data.error || `Hata (HTTP ${res.status})`;
-      status.classList.add("error");
+      setStatus("btStatus", data.error || `Hata (HTTP ${res.status})`, "error");
       return;
     }
 
-    status.textContent = `${data.symbol} — ${data.candles} mum (${data.timeframe}), strateji: ${data.strategy}, ${data.periods.length} dönem.`;
+    setStatus("btStatus", `${data.symbol} — ${data.candles} mum (${data.timeframe}), strateji: ${data.strategy}, ${data.periods.length} dönem.`, "success");
 
     let html = "";
     if (data.avg_return_pct !== undefined) {
@@ -331,7 +419,7 @@ async function runBacktest() {
         <div class="stat"><div class="label">En İyi Dönem</div><div class="value">${fmtPct(data.best_period_pct)}</div></div>
       </div>`;
     }
-    html += `<table class="bt-periods"><thead><tr>
+    html += `<div class="table-scroll"><table class="bt-periods"><thead><tr>
       <th>Dönem</th><th>İşlem</th><th>Getiri</th><th>Kazanma Oranı</th><th>Max Drawdown</th>
     </tr></thead><tbody>`;
     for (const p of data.periods) {
@@ -343,8 +431,11 @@ async function runBacktest() {
         <td>${p.max_drawdown_pct.toFixed(2)}%</td>
       </tr>`;
     }
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     results.innerHTML = html;
+    results.classList.remove("fade-in");
+    void results.offsetWidth; // reflow — animasyonu yeniden tetiklemek için
+    results.classList.add("fade-in");
 
     // Faz 11: sadece açıkça bir strateji seçildiyse (dropdown "— canlı
     // ayar —" değilse) "uygula" anlamlı — canlı ayarı kendine uygulamak
@@ -357,8 +448,7 @@ async function runBacktest() {
     }
     updateApplyRowVisibility();
   } catch (err) {
-    status.textContent = `İstek başarısız: ${err}`;
-    status.classList.add("error");
+    setStatus("btStatus", `İstek başarısız: ${err}`, "error");
   } finally {
     button.disabled = false;
   }
@@ -396,20 +486,19 @@ async function postPairStrategyAction(payload) {
 async function applyBacktestStrategy() {
   if (!lastBacktestApply) return;
   const button = document.getElementById("btApply");
-  const status = document.getElementById("btApplyStatus");
   button.disabled = true;
   try {
     const data = await postPairStrategyAction({
       symbol: lastBacktestApply.symbol, action: "apply",
       strategy: lastBacktestApply.strategy, params: lastBacktestApply.params,
     });
-    status.textContent = data.message;
-    status.classList.remove("error");
+    setStatus("btApplyStatus", data.message, "success");
+    showToast(data.message, "success");
     dashboardPairStrategies = data.pair_strategies;
     updateApplyRowVisibility();
   } catch (err) {
-    status.textContent = err.message;
-    status.classList.add("error");
+    setStatus("btApplyStatus", err.message, "error");
+    showToast(err.message, "error");
   } finally {
     button.disabled = false;
   }
@@ -418,17 +507,16 @@ async function applyBacktestStrategy() {
 async function resetBacktestStrategy() {
   if (!lastBacktestApply) return;
   const button = document.getElementById("btReset");
-  const status = document.getElementById("btApplyStatus");
   button.disabled = true;
   try {
     const data = await postPairStrategyAction({ symbol: lastBacktestApply.symbol, action: "reset" });
-    status.textContent = data.message;
-    status.classList.remove("error");
+    setStatus("btApplyStatus", data.message, "success");
+    showToast(data.message, "success");
     dashboardPairStrategies = data.pair_strategies;
     updateApplyRowVisibility();
   } catch (err) {
-    status.textContent = err.message;
-    status.classList.add("error");
+    setStatus("btApplyStatus", err.message, "error");
+    showToast(err.message, "error");
   } finally {
     button.disabled = false;
   }
@@ -442,13 +530,11 @@ document.getElementById("btReset").addEventListener("click", resetBacktestStrate
 async function runLeaderboard() {
   const symbols = Array.from(document.getElementById("lbSymbols").selectedOptions).map(o => o.value);
   const strategies = Array.from(document.getElementById("lbStrategies").selectedOptions).map(o => o.value);
-  const status = document.getElementById("lbStatus");
   const results = document.getElementById("lbResults");
   const button = document.getElementById("lbRun");
 
   if (!symbols.length || !strategies.length) {
-    status.textContent = "En az bir coin ve bir strateji seç.";
-    status.classList.add("error");
+    setStatus("lbStatus", "En az bir coin ve bir strateji seç.", "error");
     return;
   }
 
@@ -460,8 +546,7 @@ async function runLeaderboard() {
   };
 
   button.disabled = true;
-  status.classList.remove("error");
-  status.textContent = `${symbols.length} coin × ${strategies.length} strateji test ediliyor... (biraz sürebilir)`;
+  setStatus("lbStatus", `${symbols.length} coin × ${strategies.length} strateji test ediliyor... (biraz sürebilir)`);
   results.innerHTML = "";
 
   try {
@@ -472,13 +557,12 @@ async function runLeaderboard() {
     });
     const data = await res.json();
     if (!res.ok) {
-      status.textContent = data.error || `Hata (HTTP ${res.status})`;
-      status.classList.add("error");
+      setStatus("lbStatus", data.error || `Hata (HTTP ${res.status})`, "error");
       return;
     }
 
-    status.textContent = `${data.results.length} kombinasyon test edildi, en iyi getiriye göre sıralı.`;
-    let html = `<table class="bt-periods"><thead><tr>
+    setStatus("lbStatus", `${data.results.length} kombinasyon test edildi, en iyi getiriye göre sıralı.`, "success");
+    let html = `<div class="table-scroll"><table class="bt-periods"><thead><tr>
       <th>#</th><th>Coin</th><th>Strateji</th><th>Ort. Getiri</th><th>En Kötü</th><th>En İyi</th><th>Kazanma Oranı</th><th>Max Drawdown</th><th>İşlem</th>
     </tr></thead><tbody>`;
     data.results.forEach((r, i) => {
@@ -499,11 +583,13 @@ async function runLeaderboard() {
         <td>${r.trades}</td>
       </tr>`;
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     results.innerHTML = html;
+    results.classList.remove("fade-in");
+    void results.offsetWidth;
+    results.classList.add("fade-in");
   } catch (err) {
-    status.textContent = `İstek başarısız: ${err}`;
-    status.classList.add("error");
+    setStatus("lbStatus", `İstek başarısız: ${err}`, "error");
   } finally {
     button.disabled = false;
   }
@@ -514,7 +600,7 @@ document.getElementById("lbRun").addEventListener("click", runLeaderboard);
 async function selectSymbol(symbol) {
   selectedSymbol = symbol;
   document.querySelectorAll(".signal-card").forEach(el => {
-    el.classList.toggle("selected", el.querySelector(".symbol").textContent === symbol);
+    el.classList.toggle("selected", el.querySelector(".symbol")?.textContent === symbol);
   });
 
   const detail = document.getElementById("signalDetail");
@@ -556,12 +642,38 @@ async function selectSymbol(symbol) {
   signalChartSymbol = symbol;
 }
 
+// --- Faz 12: nav scrollspy — üstteki bölüm bağlantılarını, kullanıcının
+// hangi kart hizasında olduğuna göre otomatik vurgular ---
+function setupSectionNav() {
+  const links = Array.from(document.querySelectorAll("#sectionNav a"));
+  const idToLink = new Map(links.map(a => [a.getAttribute("href").slice(1), a]));
+  const sections = links.map(a => document.getElementById(a.getAttribute("href").slice(1))).filter(Boolean);
+  if (!sections.length || !("IntersectionObserver" in window)) return;
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        links.forEach(a => a.classList.remove("active"));
+        idToLink.get(entry.target.id)?.classList.add("active");
+      }
+    }
+  }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+
+  sections.forEach(s => observer.observe(s));
+}
+
 async function refreshAll() {
-  await Promise.all([refreshEquity(), refreshTrades(), refreshStats(), refreshSignals()]);
-  if (selectedSymbol) await selectSymbol(selectedSymbol);
+  try {
+    await Promise.all([refreshEquity(), refreshTrades(), refreshStats(), refreshSignals()]);
+    if (selectedSymbol) await selectSymbol(selectedSymbol);
+    setLiveStatus(true);
+  } catch (err) {
+    setLiveStatus(false);
+  }
 }
 
 refreshAll();
 loadStrategies();
 refreshPairChips();
+setupSectionNav();
 setInterval(refreshAll, 10000);
