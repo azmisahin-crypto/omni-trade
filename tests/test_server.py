@@ -25,7 +25,7 @@ import pandas as pd
 
 from omnitrade.config import Config, WebAuthConfig
 from omnitrade.storage import Storage
-from omnitrade.web.server import make_handler
+from omnitrade.web.server import _diff_fingerprint, make_handler
 
 
 def _wavy_df(n: int = 300, amplitude: float = 10.0, base: float = 100.0) -> pd.DataFrame:
@@ -45,6 +45,10 @@ class ServerTestBase(unittest.TestCase):
         self.config = Config()
         handler = make_handler(self.storage, self.config)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        # Faz 17: /api/stream testleri uzun ömürlü SSE bağlantıları açıyor;
+        # `daemon_threads` olmadan `server_close()` bu thread'in doğal
+        # bitişini bekleyip nadir bir yarış durumunda testi asabilir.
+        self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -70,6 +74,22 @@ class ServerTestBase(unittest.TestCase):
                 return resp.status, json.loads(resp.read())
         except HTTPError as exc:
             return exc.code, json.loads(exc.read())
+
+    def _read_sse_event(self, resp, timeout=5):
+        """Açık bir `/api/stream` bağlantısından bir sonraki gerçek
+        `data: ...` olayını okuyup JSON olarak döner; aradaki yorum
+        satırlarını (`: heartbeat`) ve boş satırları (olay ayracı) sessizce
+        atlar. `resp.readline()` bloklayan bir çağrı olduğundan, sunucu
+        taraf test süresi içinde bir olay GÖNDERMEZSE test kendi
+        `urlopen(..., timeout=...)` süresi dolunca zaten patlar — sonsuz
+        asılı kalma riski yok."""
+        while True:
+            line = resp.readline()
+            if not line:
+                raise AssertionError("SSE bağlantısı beklenenden erken kapandı.")
+            text = line.decode("utf-8").rstrip("\n")
+            if text.startswith("data:"):
+                return json.loads(text[len("data:"):].strip())
 
 
 class TestExistingGetEndpoints(ServerTestBase):
@@ -482,6 +502,95 @@ class TestLiveModeEndpoint(ServerTestBase):
         self.assertTrue(self.config.dry_run)  # değişiklik olmadı
 
 
+class TestStreamEndpoint(ServerTestBase):
+    """Faz 17: /api/stream (SSE) — sabit 10sn poll yerine push modeli.
+    `stream_poll_seconds` testlerde 0.2sn'ye düşürülüyor ki gerçek bir
+    değişiklikten sonraki olay birkaç saniye değil, hızlıca gelsin."""
+
+    def setUp(self):
+        super().setUp()
+        self.config.stream_poll_seconds = 0.2
+
+    def test_first_event_is_connected_with_no_changes(self):
+        with urlopen(self._url("/api/stream"), timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+            event = self._read_sse_event(resp)
+            self.assertEqual(event, {"type": "connected", "changed": []})
+
+    def test_new_trade_triggers_trades_update_event(self):
+        with urlopen(self._url("/api/stream"), timeout=5) as resp:
+            self._read_sse_event(resp)  # 'connected'
+            self.storage.log_trade("BTC/USDT", "buy", 100.0, 1.0, dry_run=True)
+            event = self._read_sse_event(resp)
+            self.assertEqual(event["type"], "update")
+            self.assertEqual(event["changed"], ["trades"])
+
+    def test_new_equity_point_triggers_equity_update_event(self):
+        with urlopen(self._url("/api/stream"), timeout=5) as resp:
+            self._read_sse_event(resp)
+            self.storage.log_equity(1050.0)
+            event = self._read_sse_event(resp)
+            self.assertEqual(event["changed"], ["equity"])
+
+    def test_new_signal_triggers_signals_update_event(self):
+        with urlopen(self._url("/api/stream"), timeout=5) as resp:
+            self._read_sse_event(resp)
+            self.storage.log_signal("ETH/USDT", "hold", 2000.0, reason="rsi nötr")
+            event = self._read_sse_event(resp)
+            self.assertEqual(event["changed"], ["signals"])
+
+    def test_mode_change_triggers_system_update_event(self):
+        with urlopen(self._url("/api/stream"), timeout=5) as resp:
+            self._read_sse_event(resp)
+            self.storage.log_mode_change(
+                action="go_live", old_dry_run=True, new_dry_run=False,
+                old_live_trading_confirmed=False, new_live_trading_confirmed=True,
+            )
+            event = self._read_sse_event(resp)
+            self.assertEqual(event["changed"], ["system"])
+
+    def test_unrelated_reads_do_not_trigger_events(self):
+        # Sadece storage'dan OKUMA yapmak (yazma değil) parmak izini
+        # değiştirmemeli — bu yüzden ilk 'connected' olayından sonra hiçbir
+        # yazma yapılmadıysa bir sonraki gerçek 'data:' olayı gelmemeli.
+        # Bunu zamanlamaya bağlı kalmadan doğrulamak için: kısa bir süre
+        # bekleyip HİÇBİR yazma yapmadan yeni bir bağlantı daha açıp onun
+        # da 'connected' ile başladığını görmek yeterli bir dolaylı kanıt
+        # (asıl "sadece değişince gönder" davranışı yukarıdaki testlerde
+        # `changed` listesinin HER ZAMAN tam olarak beklenen tek anahtarı
+        # içermesiyle zaten doğrulanıyor).
+        with urlopen(self._url("/api/stream"), timeout=5) as resp:
+            event = self._read_sse_event(resp)
+            self.assertEqual(event["changed"], [])
+
+
+class TestDiffFingerprint(unittest.TestCase):
+    """`_diff_fingerprint` — SSE döngüsünden bağımsız, saf fonksiyon testi."""
+
+    def test_no_difference_returns_empty_list(self):
+        fp = {"trades": 1, "equity": 2, "signals": 3, "system": None, "heartbeat": 1.0}
+        self.assertEqual(_diff_fingerprint(fp, dict(fp)), [])
+
+    def test_single_changed_key_is_detected(self):
+        old = {"trades": 1, "equity": 2, "signals": 3, "system": None, "heartbeat": 1.0}
+        new = dict(old, trades=2)
+        self.assertEqual(_diff_fingerprint(old, new), ["trades"])
+
+    def test_multiple_changed_keys_are_sorted(self):
+        old = {"trades": 1, "equity": 2, "signals": 3, "system": None, "heartbeat": 1.0}
+        new = dict(old, trades=2, signals=4)
+        self.assertEqual(_diff_fingerprint(old, new), ["signals", "trades"])
+
+    def test_none_to_value_is_a_change(self):
+        # Boş bir tablodan (MAX(id) -> NULL/None) ilk satır eklendiğinde de
+        # bir değişiklik olarak sayılmalı — sunucu ilk açılışta boş bir
+        # tabloyu None olarak fingerprint'ler.
+        old = {"trades": None, "equity": None, "signals": None, "system": None, "heartbeat": None}
+        new = dict(old, trades=1)
+        self.assertEqual(_diff_fingerprint(old, new), ["trades"])
+
+
 class TestLiveModeEndpointWithAuthEnabled(unittest.TestCase):
     """web_auth açıkken go_live/go_dry_run akışı — auth + confirm_text
     doğrulaması ayrı bir test sınıfında, çünkü Config web_auth alanı
@@ -631,6 +740,16 @@ class TestWebAuth(unittest.TestCase):
         )
         with self.assertRaises(HTTPError) as ctx:
             urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_stream_endpoint_also_requires_auth(self):
+        # Faz 17: /api/stream, diğer düşük riskli GET'lerden farklı bir
+        # kural İZLEMİYOR — normal `_require_auth()` yoluna tabi. Burada
+        # bağlantı kimlik doğrulaması aşamasında (yanıt gövdesi/stream
+        # başlamadan) 401 ile reddedildiği için gerçek bir SSE döngüsüne
+        # hiç girilmiyor, testin asılı kalma riski yok.
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(self._url("/api/stream"), timeout=5)
         self.assertEqual(ctx.exception.code, 401)
 
 

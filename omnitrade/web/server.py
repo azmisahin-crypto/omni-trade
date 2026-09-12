@@ -8,6 +8,8 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import sqlite3
+import time
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +39,21 @@ LIVE_MODE_CONFIRM_PHRASE = "CANLIYA GEÇİYORUM, RİSKİ ANLADIM"
 # anlamsızca yavaşlatır.
 MIN_POLL_INTERVAL_SECONDS = 5
 MAX_POLL_INTERVAL_SECONDS = 86400
+
+# Faz 17: /api/stream (SSE) — hiçbir şey değişmese bile bağlantının canlı
+# kaldığını göstermek (ve aradaki bir ters proxy'nin bağlantıyı "idle" diye
+# kapatmasını önlemek) için en fazla bu kadar sessiz kalınır, sonra bir
+# yorum satırı (`: heartbeat`) gönderilir. Gerçek veri olayı değildir,
+# tarayıcı tarafında JSON olarak PARSE EDİLMEZ (bkz. app.js).
+STREAM_HEARTBEAT_SECONDS = 15
+
+
+def _diff_fingerprint(old: dict, new: dict) -> list[str]:
+    """İki `Storage.get_stream_fingerprint()` sonucunu karşılaştırıp HANGİ
+    anahtar(lar)ın değiştiğini döner (sıralı, tekrarsız). Saf/yan etkisiz
+    bir fonksiyon olarak ayrı tutuluyor ki gerçek bir SSE bağlantısı açıp
+    zamanlamayla uğraşmadan tek başına test edilebilsin."""
+    return sorted(k for k in new if old.get(k) != new.get(k))
 
 
 def _read_scalar_fields(config_path: str) -> dict:
@@ -201,6 +218,8 @@ def make_handler(storage: Storage, config: Config):
             elif path == "/api/system/audit-log":
                 limit = int((query.get("limit") or [100])[0])
                 self._json(storage.get_mode_audit_log(limit=limit))
+            elif path == "/api/stream":
+                self._handle_stream()
             elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
             elif path == "/app.js":
@@ -740,6 +759,80 @@ def make_handler(storage: Storage, config: Config):
                 ),
             })
 
+        def _sse_send(self, payload: dict) -> None:
+            body = json.dumps(payload)
+            self.wfile.write(f"data: {body}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        def _handle_stream(self):
+            """Faz 17: sabit 10sn'lik istemci poll'u yerine push modeli
+            (bkz. PLAN.md §7.2, AUDIT_REPORT.md §7 madde 2). Bot ile web
+            süreci arasında hâlâ HİÇBİR doğrudan RPC/IPC kanalı yok (bkz.
+            AUDIT_REPORT.md §1) — bu uç nokta bot'tan bir bildirim ALMIYOR,
+            sadece web sürecinin ZATEN paylaştığı SQLite'ı kendi içinde
+            kısa aralıklarla (`config.stream_poll_seconds`) yoklayıp
+            SADECE bir şey gerçekten değiştiğinde tarayıcıya tek satırlık
+            bir olay gönderiyor. Böylece tarayıcı artık her 10sn'de 4 ayrı
+            endpoint'i kör kör çekmek yerine, gerçekten yeni bir şey
+            olduğunda haberdar olup SADECE o veriyi (mevcut REST
+            endpoint'lerinden) çekiyor.
+
+            Auth: bu handler'a girmeden önce zaten `do_GET` başında
+            `_require_auth()` çalışmış olur (diğer tüm GET'lerle aynı yol) —
+            burada AYRICA bir kontrol yok, gerek yok.
+
+            `ThreadingHTTPServer` her bağlantıyı kendi thread'inde işlediği
+            için buradaki sonsuz döngü diğer istemcileri BLOKLAMAZ; bağlantı
+            istemci tarafından kapatıldığında bir sonraki `write()`
+            `BrokenPipeError`/`ConnectionResetError` fırlatır ve thread
+            temiz şekilde sonlanır (bkz. `serve()`'deki `daemon_threads`
+            notu — süreç kapanırken de bu thread'ler asılı kalmaz).
+            """
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            # Bazı ters proxy'ler (nginx vb.) SSE yanıtlarını varsayılan
+            # olarak buffer'lar, bu da "push"u anlamsızlaştırır (olaylar
+            # buffer dolana kadar tarayıcıya ulaşmaz). README, dashboard'un
+            # doğrudan (SSH tüneli ile) erişilmesini önerdiği için bu repo
+            # içinde bir nginx katmanı yok, ama ileride biri eklerse diye
+            # bu header zararsızca eklendi.
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            try:
+                last = storage.get_stream_fingerprint()
+                self._sse_send({"type": "connected", "changed": []})
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+
+            last_heartbeat_sent = time.monotonic()
+            while True:
+                # Alt sınır: config.yaml'a yanlışlıkla 0/negatif bir değer
+                # yazılırsa CPU'yu yakan bir busy-loop'a düşmeyelim (testler
+                # gerçekçi bir bağlantı süresi için kasıtlı olarak küçük
+                # değerler, örn. 0.2, kullanabilir).
+                time.sleep(max(0.1, config.stream_poll_seconds))
+                try:
+                    current = storage.get_stream_fingerprint()
+                except sqlite3.Error:
+                    continue  # geçici bir kilit/IO hatası — bir sonraki turda tekrar dene
+
+                changed = _diff_fingerprint(last, current)
+                last = current
+
+                try:
+                    if changed:
+                        self._sse_send({"type": "update", "changed": changed})
+                        last_heartbeat_sent = time.monotonic()
+                    elif time.monotonic() - last_heartbeat_sent >= STREAM_HEARTBEAT_SECONDS:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        last_heartbeat_sent = time.monotonic()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return  # istemci bağlantıyı kapattı — thread sessizce biter
+
         def _serve_static(self, filename: str, content_type: str):
             file_path = STATIC_DIR / filename
             if not file_path.exists():
@@ -759,6 +852,15 @@ def serve(config: Config) -> None:
     storage = Storage(config.db_path)
     handler = make_handler(storage, config)
     server = ThreadingHTTPServer(("0.0.0.0", config.web_port), handler)
+    # Faz 17: /api/stream (SSE) bağlantıları istemci kapatana kadar açık
+    # kalan uzun ömürlü thread'ler açıyor. `daemon_threads=True` olmadan
+    # süreç SIGTERM/KeyboardInterrupt aldığında `server_close()` bu açık
+    # SSE thread'lerinin bitmesini BEKLER (socketserver.ThreadingMixIn'in
+    # `block_on_close` davranışı) — container durdurulurken/restart
+    # edilirken takılı kalmasın diye daemon yapıyoruz (süreç çıkarken
+    # bunlar OS tarafından temizlenir, ayrıca bir graceful-shutdown
+    # mantığına ihtiyaç yok, zaten sadece okuma yapan istemci bağlantıları).
+    server.daemon_threads = True
     print(f"Dashboard: http://localhost:{config.web_port}")
     try:
         server.serve_forever()

@@ -873,11 +873,67 @@ async function refreshAll() {
   }
 }
 
+// --- Faz 17: sabit 10sn'lik poll yerine push modeli ---
+// (bkz. PLAN.md §7.2, AUDIT_REPORT.md §7 madde 2, server.py _handle_stream)
+// Web süreci kendi SQLite'ını kısa aralıklarla yoklayıp SADECE bir şey
+// gerçekten değiştiğinde tek bir SSE olayı gönderiyor; tarayıcı da o olayda
+// belirtilen veri setini (mevcut refresh* fonksiyonlarıyla, ÇİZİM MANTIĞI
+// DEĞİŞMEDEN) normal REST endpoint'inden çekiyor. Bot<->web arasında hâlâ
+// doğrudan bir kanal yok (bkz. AUDIT_REPORT.md §1) — bu SADECE web
+// sürecinin zaten yaptığı SQLite okumasını tarayıcıya daha hızlı/az
+// gereksiz istekle yansıtıyor.
+let eventSource = null;
+
+function handleStreamChange(changed) {
+  const jobs = [];
+  if (changed.includes("trades") || changed.includes("equity")) jobs.push(refreshStats());
+  if (changed.includes("trades")) jobs.push(refreshTrades());
+  if (changed.includes("equity")) jobs.push(refreshEquity());
+  if (changed.includes("signals")) {
+    jobs.push(refreshSignals());
+    if (selectedSymbol) jobs.push(selectSymbol(selectedSymbol));
+  }
+  if (changed.includes("system")) jobs.push(refreshSystem());
+  return Promise.all(jobs);
+}
+
+function connectStream() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource("/api/stream");
+
+  eventSource.onopen = () => setLiveStatus(true);
+
+  eventSource.onmessage = (evt) => {
+    setLiveStatus(true);
+    let msg;
+    try {
+      msg = JSON.parse(evt.data);
+    } catch (err) {
+      return; // beklenmeyen/bozuk gövde — atla, aşağıdaki güvenlik ağı zaten var
+    }
+    if (msg.type === "update" && Array.isArray(msg.changed) && msg.changed.length) {
+      handleStreamChange(msg.changed).catch(() => setLiveStatus(false));
+    }
+  };
+
+  eventSource.onerror = () => {
+    // Tarayıcının EventSource'u KENDİLİĞİNDEN yeniden bağlanmayı dener
+    // (readyState CONNECTING'e döner) — burada elle reconnect KURMUYORUZ,
+    // sadece rozeti güncelliyoruz.
+    setLiveStatus(false);
+  };
+}
+
 refreshAll();
 loadStrategies();
 refreshPairChips();
 renderChecklistSummary();
 refreshSystem();
 setupTabs();
-setInterval(refreshAll, 10000);
-setInterval(refreshSystem, 15000);
+connectStream();
+// Bu ikisi artık ANA güncelleme kanalı DEĞİL, sadece bir güvenlik ağı —
+// bazı tarayıcılar arka plandaki sekmelerde EventSource'u kısıtlayabilir
+// ya da bağlantı sessizce takılı kalabilir; veri en geç bu aralıkla
+// tazelenir. Normal koşulda SSE zaten çok daha hızlı tetikler.
+setInterval(refreshAll, 60000);
+setInterval(refreshSystem, 60000);

@@ -93,6 +93,13 @@ class Config:
     # Örn: {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}}
     pair_strategies: dict = field(default_factory=dict)
     poll_interval_seconds: int = 60
+    # Faz 17: dashboard'un SSE akışını beslemek için WEB sürecinin kendi
+    # SQLite'ını ne sıklıkla yokladığı — `poll_interval_seconds`'tan (bot'un
+    # BORSAYA sorduğu aralık) TAMAMEN AYRI bir alan, karıştırılmamalı. Bu
+    # sadece yerel bir disk okuması olduğundan (bkz. storage.py
+    # get_stream_fingerprint) 2sn gibi düşük bir varsayılan borsa rate-limit
+    # riski TAŞIMAZ — dashboard'a "gerçek zamanlıya yakın" his vermek için.
+    stream_poll_seconds: int = 2
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
@@ -139,6 +146,7 @@ def load_config(config_path: str = "config/config.yaml", env_path: str = ".env")
         strategy_params=raw.get("strategy_params", {}) or {},
         pair_strategies=raw.get("pair_strategies", {}) or {},
         poll_interval_seconds=int(raw.get("poll_interval_seconds", 60)),
+        stream_poll_seconds=int(raw.get("stream_poll_seconds", 2)),
         db_path=raw.get("db_path", "data/omnitrade.db"),
         web_port=int(raw.get("web_port", 8080)),
         log_level=str(raw.get("log_level", "INFO")).upper(),

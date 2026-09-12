@@ -24,7 +24,7 @@ Bu dosya, projenin doğuşundan itibaren her fazın **hangi motivasyonla**, **ha
 | **14** | Dashboard Kimlik Doğrulama (HTTP Basic Auth) | ✅ Tamamlandı | Bu commit |
 | **15** | Tam Ekran "Kokpit" Yeniden Tasarımı (v2) | ✅ Tamamlandı | Bu commit |
 | **16** | Canlı/Dry-run modu + poll aralığı UI'dan | ✅ Tamamlandı | Bu commit |
-| **17** | Push Tabanlı Güncellemeler (SSE/WebSocket) | ⏳ Planlandı | - |
+| **17** | Push Tabanlı Güncellemeler (SSE) | ✅ Tamamlandı | Bu commit |
 | **18** | Yeni Stratejiler + Karşılaştırmalı Şablonlar | ⏳ Planlandı | - |
 
 ## Checkpoint (Faz 12 sonrası) — mimari gözden geçirme + rakip analizi
@@ -149,3 +149,26 @@ gerektirmez.
 137 → 156 test (19 yeni: `TestUpdateScalar`, `TestModeAuditLog`,
 `TestSystemEndpoint`, `TestLiveModeEndpoint`,
 `TestLiveModeEndpointWithAuthEnabled`).
+
+## Faz 17 sonrası not — neden SSE, neden bot'a dokunulmadı
+
+AUDIT_REPORT.md §6.1 gibi Faz 17'ye özel bir ZORUNLU ön koşul listesi
+yoktu (o bölüm sadece Faz 16'nın gerçek-para riskine özeldi) — ama
+raporun §1'inde vurgulanan mimari karar ("bot↔web arasında doğrudan bir
+RPC/IPC kanalı yok, tek paylaşılan durum config.yaml + SQLite") bu
+faz için de bağlayıcı bir kısıt olarak alındı: SSE akışı bot'tan bir
+bildirim ALMIYOR, sadece web sürecinin zaten okuduğu SQLite'ı kendi
+içinde kısa aralıkla yoklayıp DEĞİŞİKLİK varsa tarayıcıya haber veriyor.
+"Poll" kavramı ortadan kalkmadı, sadece ağ üzerinden (tarayıcı↔web,
+pahalı/gecikmeli) yerine yerel diskte (web↔SQLite, ucuz) yapılıyor hale
+geldi — bu, Faz 13'ün "insan restart etmesin, süreç kendi döngüsünde
+fark etsin" felsefesiyle de tutarlı bir seçim.
+
+WebSocket yerine SSE seçildi çünkü ihtiyaç tek yönlü ("bir şey değişti,
+çek" bildirimi) — projenin "stdlib-only, FastAPI/Flask yok" mimari
+tercihiyle (bkz. `server.py` modül docstring'i) SSE, `http.server`
+üzerinde ek bir kütüphane ya da elle WebSocket handshake/frame'leme
+yazmadan doğal biçimde çalışıyor.
+
+Ayrıntılı "neden" + "değişen dosyalar" kaydı her zamanki gibi
+`CHANGELOG.md`'ye eklendi; buradaki not sadece kısa bir özet.

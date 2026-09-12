@@ -161,6 +161,17 @@ Dashboard artık şunları da gösterir:
   (bkz. `engine.py`), bu ekrandan yapılan bir geçiş de config.yaml'ı
   günceller ama çalışan `bot` container'ının bunu uygulaması için
   yeniden başlatılması gerekir — panel bunu her zaman açıkça belirtir.
+- **Anlık güncelleme (Faz 17)**: dashboard artık sabit aralıklarla tüm
+  API'leri yeniden çekmiyor — tarayıcı `GET /api/stream` üzerinden tek
+  bir SSE (Server-Sent Events) bağlantısı açık tutuyor, web süreci de
+  kendi SQLite'ını kısa aralıklarla (`stream_poll_seconds`, varsayılan
+  2sn) yoklayıp SADECE bir şey gerçekten değiştiğinde (yeni işlem/sinyal/
+  equity noktası/mod değişikliği) tarayıcıya haber veriyor; tarayıcı da
+  o an SADECE ilgili paneli tazeliyor. Bot ile web arasında hâlâ doğrudan
+  bir kanal yok — bu SADECE web sürecinin zaten yaptığı SQLite okumasını
+  daha hızlı/az gereksiz istekle tarayıcıya yansıtıyor. Bağlantı koparsa
+  tarayıcı kendiliğinden yeniden bağlanır; 60sn'lik düşük frekanslı bir
+  arka plan yenilemesi de güvenlik ağı olarak kalıyor.
 
 ## 4. Telegram bildirimleri
 

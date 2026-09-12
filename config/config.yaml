@@ -7,6 +7,7 @@ dry_run_wallet: 50        # dry-run başlangıç bakiyesi (USDT)
 stake_currency: USDT
 timeframe: 1h
 poll_interval_seconds: 60  # her döngüde ne kadar beklenecek
+stream_poll_seconds: 2  # (Faz 17) dashboard SSE push'unun web sürecinde SQLite'ı ne sıklıkla yokladığı — poll_interval_seconds'tan AYRI, borsayı etkilemez
 
 pairs:
   - BTC/USDT

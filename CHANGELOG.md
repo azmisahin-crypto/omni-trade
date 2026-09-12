@@ -919,6 +919,102 @@ KARIŞTIRILMAMALI. Restart hâlâ bilinçli bir insan eylemi olarak kalıyor,
 sadece config.yaml'ı elle düzenleme + iki ayrı dosyayı (dry_run +
 live_trading_confirmed) senkron tutma zahmeti dashboard'a taşındı.
 
+## Faz 17 — Sabit 10sn poll yerine SSE push modeli ✅ Tamamlandı
+
+**Neden:** `AUDIT_REPORT.md` §7 madde 2, "push değil poll" mimari
+zayıflığını not etmişti: dashboard 10 saniyede bir dört ayrı API'yi
+(equity/trades/stats/signals) kör kör yeniden çekiyordu — hiçbir şey
+değişmemiş olsa bile. `PLAN.md`'de bu Faz 17 için "his/performans"
+başlığı altında SSE/WebSocket olarak planlıydı; stdlib-only mimari
+tercihine (`FastAPI/Flask yok`, bkz. `server.py` modül docstring'i) en
+uygunu WebSocket'in el yordamıyla frame'lenmesi yerine tek yönlü,
+stdlib `http.server` üzerinde doğal biçimde çalışan Server-Sent
+Events (SSE) oldu — bu iş zaten sadece sunucu→tarayıcı yönünde
+("bir şey değişti, çek") bir bildirim gerektiriyor, tarayıcıdan sunucuya
+ayrı bir kanal gerekmiyor.
+
+Faz 16 sonrası denetim ön koşulu yoktu (§6.1 sadece Faz 16'ya özeldi ve
+karşılandı — bkz. yukarıdaki bölüm) — bu faz için AUDIT_REPORT.md'de
+bekleyen bir kritik/engelleyici madde tespit edilmedi, kodlamaya
+doğrudan geçildi.
+
+**Önemli mimari not:** Bot ve web hâlâ AYRI süreçler ve aralarında
+doğrudan bir RPC/IPC kanalı yok (bkz. AUDIT_REPORT.md §1) — bu faz bunu
+DEĞİŞTİRMİYOR. `/api/stream`, bot'tan bir bildirim ALMIYOR; sadece web
+sürecinin zaten paylaştığı SQLite'ı KENDİ İÇİNDE kısa aralıklarla
+(`stream_poll_seconds`, varsayılan 2sn) yoklayıp değişiklik olduğunda
+tarayıcıya haber veriyor. Yani "poll" ortadan kalkmadı, sadece YERİ
+değişti: tarayıcı↔web arasındaki (ağ üzerinden, pahalı) poll yerine
+web↔SQLite arasında (yerel disk, ucuz) bir poll var artık.
+
+**Değişenler:**
+
+- **`omnitrade/storage.py`**: yeni `get_stream_fingerprint()` —
+  `trades`/`equity`/`signals`/`mode_audit_log` tablolarının `MAX(id)`'si
+  + son heartbeat ts'i. `INTEGER PRIMARY KEY` sütunları SQLite'ta rowid
+  olduğundan bu sorgu ucuz (tam tablo taraması gerekmez).
+- **`omnitrade/config.py`**: yeni `stream_poll_seconds: int = 2` alanı —
+  `poll_interval_seconds` (botun BORSAYA sorduğu aralık) ile
+  KARIŞTIRILMAMALI, bu sadece web sürecinin yerel SQLite yoklama
+  aralığı, borsa rate-limit riski taşımaz. `config/config.yaml`'a
+  varsayılanla birlikte eklendi; şimdilik dashboard'dan değiştirilemiyor
+  (bilinçli olarak dar kapsam — bkz. "Kasıtlı olarak yapılMAYAN").
+- **`omnitrade/web/server.py`**:
+  - `GET /api/stream` — SSE bağlantısı. Bağlanır bağlanmaz
+    `{"type": "connected", "changed": []}` gönderir, sonra
+    `stream_poll_seconds` aralığıyla fingerprint'i kontrol edip fark
+    varsa `{"type": "update", "changed": [...]}` push eder. 15sn'den
+    uzun sessizlikte bir `: heartbeat` yorum satırı gönderir (ters
+    proxy'lerin bağlantıyı "idle" diye kapatmasını önlemek için —
+    tarayıcı tarafında veri olarak parse EDİLMEZ). Diğer tüm GET'lerle
+    AYNI `_require_auth()` yolundan geçer, özel bir auth kuralı yok
+    (Faz 16'daki `/api/system/live-mode`'un aksine — o gerçek para
+    riski taşıyordu, bu sadece salt-okunur bir bildirim kanalı).
+  - `_diff_fingerprint(old, new)` — saf/yan etkisiz yardımcı, hangi
+    anahtar(lar)ın değiştiğini döner; SSE zamanlamasından bağımsız
+    test edilebilsin diye ayrı tutuldu.
+  - `serve()`: `ThreadingHTTPServer.daemon_threads = True` — artık
+    `/api/stream` bağlantıları istemci kapatana kadar açık kalan uzun
+    ömürlü thread'ler açtığından, süreç durdurulurken bunların
+    `server_close()`'u asmaması için.
+- **`omnitrade/web/static/app.js`**: `setInterval(refreshAll, 10000)` +
+  `setInterval(refreshSystem, 15000)` kaldırıldı. Yerine `connectStream()`
+  — bir `EventSource` açıp gelen `changed` listesine göre SADECE ilgili
+  `refresh*()` fonksiyonunu çağırıyor (equity/trades/stats/signals/system
+  — çizim/DOM güncelleme mantığı DEĞİŞMEDİ, sadece NE ZAMAN tetiklendiği
+  değişti). Tarayıcının yerleşik `EventSource` otomatik yeniden bağlanma
+  davranışına güvenildi, elle reconnect mantığı YAZILMADI (çift bağlantı
+  riskinden kaçınmak için). 60sn'lik `refreshAll`/`refreshSystem`
+  `setInterval`'ları GÜVENLİK AĞI olarak bırakıldı (SSE sessizce
+  koparsa/arka plan sekmesinde kısıtlanırsa diye) — artık ana güncelleme
+  kanalı değiller.
+- **Testler**: `TestStreamEndpoint` (6 test — connected olayı, trade/
+  equity/signal/mode değişikliklerinin doğru `changed` anahtarını
+  tetiklediği, ilgisiz okumaların tetiklemediği), `TestDiffFingerprint`
+  (4 test — saf fonksiyon), `TestWebAuth.test_stream_endpoint_also_
+  requires_auth` (1 test). 156 → 167 test, hepsi yeşil
+  (`PYTHONPATH=. python -m unittest discover -s tests`, 34s).
+  SSE testleri gerçek bir `ThreadingHTTPServer`e karşı gerçek bir
+  bağlantı açıp `resp.readline()` ile satır satır okuyor (mock yok);
+  `stream_poll_seconds` testlerde 0.2sn'ye düşürülerek testlerin
+  saniyeler sürmesi önlendi.
+
+**Kasıtlı olarak yapılMAYAN:**
+- `stream_poll_seconds` için bir dashboard/API kontrolü — Faz 16'nın
+  `poll_interval_seconds` kontrolüne benzer bir "Sistem & Mod" alanı
+  eklenebilirdi ama kapsam bilinçli olarak dar tutuldu (kullanıcının
+  "minimal olsun" tercihiyle tutarlı, bkz. PLAN.md §2); ileride
+  istenirse `update_scalar()` zaten hazır, sadece yeni bir endpoint +
+  form alanı eklemek yeterli olur.
+- Bot sürecine SSE/push eklemek (örn. sinyal üretilir üretilmez web'e
+  bildirmek) — bu, AUDIT_REPORT.md §1'de bilinçli olarak korunan
+  "bot↔web arasında doğrudan kanal yok" mimari kararını BOZAR. Bu faz
+  sadece web sürecinin KENDİ SQLite okumasını hızlandırıp tarayıcıya
+  daha verimli yansıtıyor, bot'a dokunmuyor.
+- WebSocket — SSE, bu tek yönlü ("sunucu→tarayıcı bildir") kullanım
+  için yeterli ve stdlib `http.server` üzerinde WebSocket handshake/
+  frame'lemeyi elle yazmaktan çok daha az kod/risk taşıyor.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

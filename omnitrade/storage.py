@@ -193,6 +193,33 @@ class Storage:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
+    def get_stream_fingerprint(self) -> dict:
+        """Faz 17: SSE push modeli için ucuz bir 'durum parmak izi' —
+        `trades`/`equity`/`signals`/`mode_audit_log` tablolarının en son
+        satır id'si + heartbeat zaman damgası. Web süreci bunu kısa
+        aralıklarla (bkz. server.py `_handle_stream`) bir öncekiyle
+        karşılaştırır; SADECE değişen anahtar(lar) tarayıcıya push edilir.
+        INTEGER PRIMARY KEY sütunları SQLite'ta rowid'nin kendisi olduğundan
+        `MAX(id)` burada tam tablo taraması GEREKTİRMEZ — B-tree'nin en sağ
+        yaprağına tek adımda gidilir, bu yüzden trades/equity/signals
+        tabloları büyüse bile bu sorgu ucuz kalır."""
+        cur = self.conn.execute(
+            "SELECT "
+            "(SELECT MAX(id) FROM trades), "
+            "(SELECT MAX(id) FROM equity), "
+            "(SELECT MAX(id) FROM signals), "
+            "(SELECT MAX(id) FROM mode_audit_log), "
+            "(SELECT ts FROM heartbeat WHERE id = 1)"
+        )
+        trades_id, equity_id, signals_id, audit_id, heartbeat_ts = cur.fetchone()
+        return {
+            "trades": trades_id,
+            "equity": equity_id,
+            "signals": signals_id,
+            "system": audit_id,
+            "heartbeat": heartbeat_ts,
+        }
+
     def beat(self) -> None:
         """Her başarılı döngü sonunda çağrılır — dışarıdan (healthcheck.py)
         botun canlı olup olmadığını, son ne zaman çalıştığını kontrol etmek için."""
