@@ -234,6 +234,7 @@ için bilinçli bir tasarım tercihi).
   sadece trade izni yeterli.
 - Ayrıntılı go/no-go kontrol listesi için `LIVE_TRADING_CHECKLIST.md`'ye,
   gerekçeler için `CHANGELOG.md`'ye bak.
+- Ayrıntılı planlar için `PLAN.md`dosyasına bak.
 
 ## Testler
 
