@@ -109,6 +109,73 @@ async function refreshSignals() {
   populateBacktestSymbols(signals.map(s => s.symbol));
 }
 
+// --- Faz 10: dashboard'dan coin ekle/çıkar ---
+
+async function refreshPairChips() {
+  const data = await fetchJSON("/api/config/pairs");
+  const container = document.getElementById("pairChips");
+  container.innerHTML = "";
+  for (const symbol of data.pairs) {
+    const chip = document.createElement("span");
+    chip.className = "pair-chip";
+    chip.innerHTML = `${symbol} <button type="button" title="Kaldır">×</button>`;
+    chip.querySelector("button").addEventListener("click", () => removePair(symbol, chip));
+    container.appendChild(chip);
+  }
+}
+
+function setPairStatus(message, isError) {
+  const status = document.getElementById("pairStatus");
+  status.textContent = message;
+  status.classList.toggle("error", !!isError);
+}
+
+async function postPairAction(symbol, action) {
+  const res = await fetch("/api/config/pairs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol, action }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Hata (HTTP ${res.status})`);
+  return data;
+}
+
+async function addPair() {
+  const input = document.getElementById("pairInput");
+  const button = document.getElementById("pairAdd");
+  const symbol = input.value.trim();
+  if (!symbol) return;
+  button.disabled = true;
+  try {
+    const data = await postPairAction(symbol, "add");
+    input.value = "";
+    setPairStatus(data.message, false);
+    await refreshPairChips();
+  } catch (err) {
+    setPairStatus(err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function removePair(symbol, chipEl) {
+  chipEl.querySelector("button").disabled = true;
+  try {
+    const data = await postPairAction(symbol, "remove");
+    setPairStatus(data.message, false);
+    await refreshPairChips();
+  } catch (err) {
+    setPairStatus(err.message, true);
+    chipEl.querySelector("button").disabled = false;
+  }
+}
+
+document.getElementById("pairAdd").addEventListener("click", addPair);
+document.getElementById("pairInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") addPair();
+});
+
 // --- Faz 8: strateji dropdown + parametre formu backend'den otomatik ---
 
 let strategySchemas = [];
@@ -403,4 +470,5 @@ async function refreshAll() {
 
 refreshAll();
 loadStrategies();
+refreshPairChips();
 setInterval(refreshAll, 10000);

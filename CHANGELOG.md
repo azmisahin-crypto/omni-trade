@@ -535,15 +535,66 @@ burada sadece keşif/karşılaştırma var.
 
 ---
 
+## Faz 10 — dashboard'dan coin ekle/çıkar ✅ Tamamlandı
+
+**Neden:** Faz 6-9 ile backtest/walk-forward/leaderboard tamamen UI'dan
+yapılabilir hale geldi, ama hangi coinlerin botun izlediği listede
+(`config.yaml`'daki `pairs`) olduğunu değiştirmek hâlâ SSH'lanıp dosyayı
+elle düzenlemeyi gerektiriyordu — "en düşük parayla en iyi stratejiyi
+hızlıca test etmek" hedefine göre bu gereksiz bir sürtünmeydi, özellikle
+leaderboard'da denenmemiş yeni bir coin görmek isteyince.
+
+**Değişen:**
+- **`omnitrade/config.py`**:
+  - `normalize_pair(symbol)` — `"btc/usdt"` gibi girdileri `"BTC/USDT"`'ye
+    çevirir, format (`BAZ/QUOTE`) geçersizse `ValueError` fırlatır. Borsanın
+    gerçekten bu pariteyi listelediğini KONTROL ETMEZ (ağ isteği
+    gerektirir) — sadece bariz yazım hatalarını yakalar.
+  - `update_pairs(config_path, pairs)` — `config.yaml`'daki `pairs:`
+    bloğunu YERİNDE (regex ile) değiştirir, dosyanın geri kalanındaki
+    yorumları/bölümleri korur. Bilerek `yaml.safe_dump` ile tüm dosyayı
+    yeniden yazMAdık — bu, config.yaml'daki tüm açıklama yorumlarını
+    silerdi.
+  - `Config` artık `config_path` alanı taşıyor (`load_config()` tarafından
+    set edilir) — `update_pairs()`'ın hangi dosyaya yazacağını bilmesi için.
+- **`omnitrade/web/server.py`**: yeni `GET /api/config/pairs` (mevcut
+  listeyi döner) ve `POST /api/config/pairs` (`{"symbol", "action":
+  "add"|"remove"}`) endpoint'leri. Kurallar: aynı coin iki kez eklenemez,
+  son coin silinemez (en az 1 parite kalmalı), geçersiz format/aksiyon
+  400 döner. Başarılı yanıt her zaman `restart_required: true` +
+  kullanıcıya gösterilecek bir mesaj içerir.
+- **`omnitrade/web/static/index.html` + `app.js`**: yeni "Coin Yönetimi"
+  paneli — mevcut coinler çip/rozet olarak listelenir (her birinde ×
+  butonu), altında yeni coin eklemek için input + buton. İşlem sonrası
+  durum mesajı (başarı ya da hata) gösterilir.
+- Testler: `tests/test_config.py::TestNormalizePair` +
+  `TestUpdatePairs` (9 test), `tests/test_server.py::TestConfigPairsEndpoint`
+  (9 test, gerçek HTTP istekleriyle — GET, add/remove başarı, format/
+  duplicate/son-coin/bilinmeyen-aksiyon hata yolları, in-memory config'in
+  ve dosyanın gerçekten güncellendiğinin doğrulanması).
+  **Toplam: 100 → 116 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Bu isteğin çalışan `bot` container'ını
+canlı olarak (otomatik restart ile) etkilemesi. `config.yaml` sadece
+BAŞLANGIÇTA okunuyor (`engine.py`'de `TradingEngine.__init__`), bu yüzden
+web container'ı dosyayı güncelledikten sonra `bot`'un bunu görmesi için
+yeniden başlatılması gerekiyor. Otomatik restart (docker socket'i web
+container'ına bağlamak) teknik olarak mümkün ama web'e (dış dünyaya en
+yakın, en az güvenilir yüzey) container kontrol yetkisi vermek —
+sırf bu rahatlık için — orantısız bir risk artışı olurdu. Panel bu
+kısıtı `restart_required` mesajıyla açıkça gösteriyor, sessizce
+gizlemiyor.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı
    temsil ediyor, mesajları neyin neden yapıldığını anlatıyor.
 2. `PYTHONPATH=. python -m unittest discover -s tests -v` ile testlerin
    hâlâ geçtiğini doğrulayarak başla.
-3. Planlanan 6 faz + 2 düzeltme fazı tamamlandı (bkz. yukarısı). Yeni bir
-   iş varsa (kullanıcı isteği, bulunan bug, yeni faz), önce burada "neden"
-   yazan bir bölüm taslağı aç, sonra uygula — kod değil dokümantasyon
-   önce planlanmalı ki gerekçe kaybolmasın.
+3. Faz 0-10 (+ düzeltme fazları 1.5/2.5/3.6) tamamlandı — güncel durum ve
+   sıradaki fazlar için `PLAN.md`'deki özet matrise bak. Yeni bir iş varsa
+   (kullanıcı isteği, bulunan bug, yeni faz), önce burada "neden" yazan
+   bir bölüm taslağı aç, sonra uygula — kod değil dokümantasyon önce
+   planlanmalı ki gerekçe kaybolmasın.
 4. Her iş sonunda bu dosyaya yeni bir bölüm ekle — "Faz X ✅ Tamamlandı"
    veya "<konu> — ✅ Tamamlandı" formatında + değişen dosyalar + neden.

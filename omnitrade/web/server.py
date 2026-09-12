@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from omnitrade.backtest import run_backtest, run_walk_forward
-from omnitrade.config import Config
+from omnitrade.config import Config, normalize_pair, update_pairs
 from omnitrade.exchange import ExchangeClient
 from omnitrade.stats import compute_drawdown_curve, compute_summary_stats
 from omnitrade.storage import Storage
@@ -68,6 +68,11 @@ def make_handler(storage: Storage, config: Config):
                 # strateji eklendiğinde (STRATEGIES sözlüğüne kayıt) burada
                 # da otomatik görünür, frontend değişikliği gerekmez.
                 self._json(list_strategies())
+            elif path == "/api/config/pairs":
+                # Faz 10: dashboard'daki "Coin Yönetimi" paneli şu an
+                # config'te (in-memory, bu web sürecinde) tanımlı pariteleri
+                # buradan okur.
+                self._json({"pairs": list(config.pairs)})
             elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
             elif path == "/app.js":
@@ -81,6 +86,8 @@ def make_handler(storage: Storage, config: Config):
                 self._handle_backtest()
             elif parsed.path == "/api/backtest/batch":
                 self._handle_backtest_batch()
+            elif parsed.path == "/api/config/pairs":
+                self._handle_config_pairs()
             else:
                 self.send_error(404)
 
@@ -276,6 +283,84 @@ def make_handler(storage: Storage, config: Config):
                 "walk_forward": n_splits,
                 "candles": {s: len(dfs[s]) for s in symbols},
                 "results": rows,
+            })
+
+        def _handle_config_pairs(self):
+            """Faz 10: dashboard'dan coin ekle/çıkar — önceden `pairs` listesi
+            sadece SSH'lanıp `config/config.yaml`'ı elle düzenleyerek
+            değiştirilebiliyordu. Gövde: `{"symbol": "SOL/USDT", "action":
+            "add"|"remove"}`.
+
+            Bilerek YAPILMAYAN: bu isteğin çalışan bot sürecini (ayrı
+            container) canlı olarak etkilemesi — config sadece dosyaya
+            yazılır, bot'un yeni pariteyi görmesi için yeniden başlatılması
+            gerekir. Bu yüzden yanıt her zaman `restart_required: true`
+            döner ve dashboard bunu kullanıcıya açıkça gösterir. Otomatik
+            restart (örn. docker socket üzerinden) bilinçli olarak
+            eklenmedi — web container'ına docker'ı kontrol etme yetkisi
+            vermek, "canlı pariteyi dashboard'dan değiştirebilme"
+            kolaylığına göre orantısız bir güvenlik/blast-radius artışı
+            olurdu.
+            """
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            action = req.get("action")
+            raw_symbol = req.get("symbol")
+            if action not in ("add", "remove"):
+                self._json({"error": "'action' 'add' ya da 'remove' olmalı."}, status=400)
+                return
+            if not raw_symbol:
+                self._json({"error": "'symbol' zorunlu."}, status=400)
+                return
+
+            try:
+                symbol = normalize_pair(raw_symbol)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=400)
+                return
+
+            current = list(config.pairs)
+
+            if action == "add":
+                if symbol in current:
+                    self._json({"error": f"{symbol} zaten listede."}, status=400)
+                    return
+                new_pairs = current + [symbol]
+            else:
+                if symbol not in current:
+                    self._json({"error": f"{symbol} listede değil."}, status=400)
+                    return
+                if len(current) <= 1:
+                    self._json({"error": "En az bir coin kalmalı — son pariteyi silemezsin."}, status=400)
+                    return
+                new_pairs = [p for p in current if p != symbol]
+
+            try:
+                update_pairs(config.config_path, new_pairs)
+            except OSError as exc:
+                self._json({"error": f"config.yaml yazılamadı: {exc}"}, status=500)
+                return
+
+            # In-memory config'i de güncelle — bu WEB sürecinin kendi
+            # görünümü tutarlı kalsın diye (örn. hemen ardından GET
+            # /api/config/pairs çağrılırsa yeni listeyi görsün). Ayrı bir
+            # süreç olan bot container'ını ETKİLEMEZ, bkz. yukarıdaki not.
+            config.pairs = new_pairs
+
+            self._json({
+                "pairs": new_pairs,
+                "restart_required": True,
+                "message": (
+                    "config.yaml güncellendi. Çalışan bota bunu fark "
+                    "ettirmek için `docker compose restart bot` (ya da "
+                    "`deploy.sh`) çalıştırman gerekiyor."
+                ),
             })
 
         def _serve_static(self, filename: str, content_type: str):

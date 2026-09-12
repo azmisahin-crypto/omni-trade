@@ -100,6 +100,14 @@ python -m omnitrade.cli web
 
 Dashboard artık şunları da gösterir:
 
+- **Coin Yönetimi**: `config.yaml`'daki `pairs` listesini artık elle
+  düzenlemene gerek yok — dashboarddan coin ekleyip silebilirsin
+  (`GET`/`POST /api/config/pairs`). **Önemli:** bu sadece `config.yaml`
+  dosyasını günceller; çalışan `bot` container'ı config'i sadece
+  başlangıçta okuduğu için yeni pariteyi fark etmesi için yeniden
+  başlatılması gerekir (`docker compose restart bot` ya da `deploy.sh`) —
+  panel her işlemden sonra bunu hatırlatır. En az bir coin her zaman
+  listede kalmak zorunda.
 - **Tüm coinler — son sinyal paneli**: `pairs`'teki her coin için, pozisyon
   açılmış olsun olmasın, en son üretilen sinyal (LONG/SHORT/HOLD rozetli
   kart). Strateji her döngüde bir sinyal üretir ama `Portfolio` bunu

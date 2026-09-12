@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from omnitrade.config import load_config
+from omnitrade.config import load_config, normalize_pair, update_pairs
 
 
 class TestLoadConfig(unittest.TestCase):
@@ -117,6 +117,71 @@ exchange:
         config_path = self._write("config.yaml", "pairs:\n  - BTC/USDT\n  - ETH/USDT\n")
         cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
         self.assertEqual(cfg.pairs, ["BTC/USDT", "ETH/USDT"])
+
+    def test_config_path_is_recorded_on_the_config_object(self):
+        config_path = self._write("config.yaml", "pairs:\n  - BTC/USDT\n")
+        cfg = load_config(config_path=config_path, env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.config_path, config_path)
+
+
+class TestNormalizePair(unittest.TestCase):
+    def test_valid_pair_is_uppercased(self):
+        self.assertEqual(normalize_pair("btc/usdt"), "BTC/USDT")
+        self.assertEqual(normalize_pair("  SOL/USDT  "), "SOL/USDT")
+
+    def test_missing_slash_is_rejected(self):
+        with self.assertRaises(ValueError):
+            normalize_pair("BTCUSDT")
+
+    def test_empty_or_garbage_is_rejected(self):
+        with self.assertRaises(ValueError):
+            normalize_pair("")
+        with self.assertRaises(ValueError):
+            normalize_pair("BTC/USD/T")
+        with self.assertRaises(ValueError):
+            normalize_pair("B/USDT")  # baz tarafı çok kısa
+
+
+class TestUpdatePairs(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmp = Path(self._tmpdir.name)
+
+    def test_replaces_pairs_block_and_preserves_rest_of_file(self):
+        config_path = self.tmp / "config.yaml"
+        config_path.write_text(
+            "dry_run: true\n"
+            "\n"
+            "pairs:\n"
+            "  - BTC/USDT\n"
+            "  - ETH/USDT\n"
+            "\n"
+            "strategy: RsiStrategy  # bir yorum\n"
+        )
+        update_pairs(str(config_path), ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+        text = config_path.read_text()
+        self.assertIn("dry_run: true", text)
+        self.assertIn("strategy: RsiStrategy  # bir yorum", text)
+        self.assertIn("pairs:\n  - BTC/USDT\n  - ETH/USDT\n  - SOL/USDT\n", text)
+
+        cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.pairs, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+
+    def test_removing_a_pair_updates_the_block(self):
+        config_path = self.tmp / "config.yaml"
+        config_path.write_text("pairs:\n  - BTC/USDT\n  - ETH/USDT\n  - SOL/USDT\n")
+        update_pairs(str(config_path), ["BTC/USDT", "SOL/USDT"])
+        cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.pairs, ["BTC/USDT", "SOL/USDT"])
+
+    def test_appends_pairs_block_when_missing_from_file(self):
+        config_path = self.tmp / "config.yaml"
+        config_path.write_text("dry_run: true\n")
+        update_pairs(str(config_path), ["BTC/USDT"])
+        cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.pairs, ["BTC/USDT"])
+        self.assertIn("dry_run: true", config_path.read_text())
 
 
 if __name__ == "__main__":

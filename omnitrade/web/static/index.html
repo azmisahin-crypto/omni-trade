@@ -68,6 +68,29 @@
   .bt-periods th, .bt-periods td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #2a2e37; font-size: 13px; }
   .bt-pos { color: #4ade80; }
   .bt-neg { color: #f87171; }
+
+  .pair-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pair-chip {
+    display: inline-flex; align-items: center; gap: 8px; background: #12141a;
+    border: 1px solid #2a2e37; border-radius: 999px; padding: 6px 8px 6px 14px;
+    font-size: 13px; font-weight: 600;
+  }
+  .pair-chip button {
+    background: #2a2e37; color: #f87171; border: none; border-radius: 50%;
+    width: 20px; height: 20px; line-height: 1; cursor: pointer; font-size: 13px;
+  }
+  .pair-chip button:hover { background: #3a1616; }
+  .pair-chip button:disabled { opacity: .5; cursor: wait; }
+  #pairInput {
+    background: #12141a; border: 1px solid #2a2e37; border-radius: 8px;
+    color: #e6e6e6; padding: 8px 10px; font-size: 14px;
+  }
+  #pairAdd {
+    background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; height: 38px;
+  }
+  #pairAdd:hover { background: #2563eb; }
+  #pairAdd:disabled { background: #2a2e37; color: #6b7280; cursor: wait; }
 </style>
 </head>
 <body>
@@ -81,6 +104,24 @@
       <div class="stat"><div class="label">Max Drawdown</div><div class="value" id="statDrawdown">–</div></div>
       <div class="stat"><div class="label">Kapanan İşlem</div><div class="value" id="statTradeCount">–</div></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Coin Yönetimi</h2>
+    <p style="color:#6b7280;font-size:13px;margin-top:-8px;">
+      Botun izlediği pariteleri buradan ekle/çıkar — artık `config.yaml`'ı
+      elle düzenlemene gerek yok. <strong>Önemli:</strong> bu sadece
+      config.yaml'ı günceller; çalışan botun yeni listeyi fark etmesi için
+      yine de yeniden başlatılması gerekir (aşağıda hatırlatılır).
+    </p>
+    <div class="pair-chips" id="pairChips"></div>
+    <div class="backtest-form" style="margin-top:12px;">
+      <label>Yeni coin <span class="hint">(BAZ/QUOTE, örn. SOL/USDT)</span>
+        <input id="pairInput" type="text" placeholder="SOL/USDT" style="width:160px;" />
+      </label>
+      <button id="pairAdd" type="button">Ekle</button>
+    </div>
+    <div id="pairStatus" class="bt-status"></div>
   </div>
 
   <div class="card">

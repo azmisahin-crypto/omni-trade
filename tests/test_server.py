@@ -11,8 +11,10 @@ edilmiş oluyor.
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -244,6 +246,72 @@ class TestBacktestBatchEndpoint(ServerTestBase):
         })
         self.assertEqual(status, 502)
         self.assertIn("error", body)
+
+
+class TestConfigPairsEndpoint(ServerTestBase):
+    """Faz 10: dashboard'dan coin ekle/çıkar. `Config.config_path` bilerek
+    gerçek `config/config.yaml` yerine geçici bir dosyaya işaret edecek
+    şekilde ayarlanıyor — testler asıl repo config'ine yazmamalı."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = Path(self._tmpdir.name) / "config.yaml"
+        self.config_path.write_text("dry_run: true\npairs:\n  - BTC/USDT\n  - ETH/USDT\n")
+        super().setUp()
+        self.config.pairs = ["BTC/USDT", "ETH/USDT"]
+        self.config.config_path = str(self.config_path)
+
+    def test_get_returns_current_pairs(self):
+        body = self._get_json("/api/config/pairs")
+        self.assertEqual(body["pairs"], ["BTC/USDT", "ETH/USDT"])
+
+    def test_add_valid_pair_updates_memory_and_file(self):
+        status, body = self._post_json("/api/config/pairs", {"symbol": "sol/usdt", "action": "add"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["pairs"], ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+        self.assertTrue(body["restart_required"])
+        self.assertEqual(self.config.pairs, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+        self.assertIn("SOL/USDT", self.config_path.read_text())
+        self.assertIn("dry_run: true", self.config_path.read_text())
+
+    def test_add_duplicate_pair_is_400(self):
+        status, body = self._post_json("/api/config/pairs", {"symbol": "BTC/USDT", "action": "add"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+        self.assertEqual(self.config.pairs, ["BTC/USDT", "ETH/USDT"])
+
+    def test_add_invalid_format_is_400(self):
+        status, body = self._post_json("/api/config/pairs", {"symbol": "BTCUSDT", "action": "add"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_remove_existing_pair_updates_memory_and_file(self):
+        status, body = self._post_json("/api/config/pairs", {"symbol": "ETH/USDT", "action": "remove"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["pairs"], ["BTC/USDT"])
+        self.assertEqual(self.config.pairs, ["BTC/USDT"])
+        self.assertNotIn("ETH/USDT", self.config_path.read_text())
+
+    def test_cannot_remove_last_remaining_pair(self):
+        self._post_json("/api/config/pairs", {"symbol": "ETH/USDT", "action": "remove"})
+        status, body = self._post_json("/api/config/pairs", {"symbol": "BTC/USDT", "action": "remove"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+        self.assertEqual(self.config.pairs, ["BTC/USDT"])
+
+    def test_remove_nonexistent_pair_is_400(self):
+        status, body = self._post_json("/api/config/pairs", {"symbol": "SOL/USDT", "action": "remove"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_invalid_action_is_400(self):
+        status, body = self._post_json("/api/config/pairs", {"symbol": "BTC/USDT", "action": "delete"})
+        self.assertEqual(status, 400)
+
+    def test_missing_symbol_is_400(self):
+        status, body = self._post_json("/api/config/pairs", {"action": "add"})
+        self.assertEqual(status, 400)
 
 
 if __name__ == "__main__":
