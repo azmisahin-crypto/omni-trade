@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -184,6 +185,126 @@ class TestRunOnceOnlyNotifiesOnRealTrade(unittest.TestCase):
             engine.run_once()
 
         mock_alert.assert_called_once()
+
+
+class TestConfigHotReload(unittest.TestCase):
+    """Faz 13: config.yaml diskte değişince bot artık YENİDEN
+    BAŞLATILMADAN, çalışırken bunu fark edip uyguluyor (bkz.
+    engine.py::_reload_config_if_changed). Önceden (Faz 10/11) dashboard
+    sadece dosyayı güncelliyordu, botun bunu görmesi için container'ın
+    elle yeniden başlatılması gerekiyordu — bu testler o sürtünmenin artık
+    olmadığını doğruluyor."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = str(Path(self._tmpdir.name) / "config.yaml")
+        self.db_path = str(Path(self._tmpdir.name) / "test.db")
+        self._write_yaml(pairs=["BTC/USDT"])
+
+    def _write_yaml(self, **overrides) -> None:
+        """Minimal ama gerçek bir config.yaml yazar (`load_config` ile
+        okunacak) — mtime'ın gerçekten ilerlediğinden emin olmak için
+        dosyayı yazdıktan sonra mtime'ı bilinçli olarak ileri alıyoruz;
+        aksi halde bazı dosya sistemlerinin saniye altı çözünürlüğü testi
+        (yanlışlıkla "değişmedi" sanıp) kırılgan yapabilirdi.
+        """
+        raw = {
+            "dry_run": overrides.get("dry_run", True),
+            "dry_run_wallet": 1000.0,
+            "pairs": overrides.get("pairs", ["BTC/USDT"]),
+            "strategy": overrides.get("strategy", "RsiStrategy"),
+            "strategy_params": overrides.get("strategy_params", {}),
+            "pair_strategies": overrides.get("pair_strategies", {}),
+            "db_path": self.db_path,
+            "risk": overrides.get("risk", {}),
+        }
+        import yaml
+        Path(self.config_path).write_text(yaml.safe_dump(raw))
+        self._bump_mtime()
+
+    def _bump_mtime(self) -> None:
+        current = Path(self.config_path).stat().st_mtime
+        future = current + 5
+        os.utime(self.config_path, (future, future))
+
+    def _make_engine(self, **overrides):
+        from omnitrade.engine import TradingEngine
+        config = _make_config(self._tmpdir.name, config_path=self.config_path, **overrides)
+        return TradingEngine(config)
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_new_pair_added_to_file_is_picked_up_without_restart(self, mock_exchange_cls):
+        engine = self._make_engine(pairs=["BTC/USDT"])
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+
+        engine.run_once()  # ilk çağrı: sadece referans mtime'ı kullanır, değişiklik yok
+        self.assertEqual(engine.config.pairs, ["BTC/USDT"])
+
+        self._write_yaml(pairs=["BTC/USDT", "ETH/USDT"])
+        engine.run_once()
+
+        self.assertEqual(engine.config.pairs, ["BTC/USDT", "ETH/USDT"])
+        latest_symbols = {s["symbol"] for s in engine.storage.get_latest_signals()}
+        self.assertIn("ETH/USDT", latest_symbols)  # yeni coin gerçekten döngüye dahil oldu
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_pair_strategy_override_hot_reloads(self, mock_exchange_cls):
+        from omnitrade.strategies.rsi_strategy import RsiStrategy
+
+        engine = self._make_engine(pairs=["BTC/USDT", "ETH/USDT"])
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+        engine.run_once()
+        self.assertNotIn("ETH/USDT", engine.strategies)
+
+        self._write_yaml(
+            pairs=["BTC/USDT", "ETH/USDT"],
+            pair_strategies={"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}},
+        )
+        engine.run_once()
+
+        self.assertIsInstance(engine.strategies["ETH/USDT"], RsiStrategy)
+        self.assertEqual(engine.strategies["ETH/USDT"].period, 21)
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_restart_only_field_change_is_not_applied_but_warns(self, mock_exchange_cls):
+        engine = self._make_engine(pairs=["BTC/USDT"], dry_run=True)
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+        engine.run_once()
+
+        self._write_yaml(pairs=["BTC/USDT"], dry_run=False)
+        with patch.object(engine.notifier, "system_alert") as mock_alert:
+            engine.run_once()
+
+        # dry_run restart-only bir alan: dosyada değişse de çalışan
+        # nesnede uygulanmaz (Portfolio hâlâ mevcut olmalı) — sadece uyarı verilir.
+        self.assertTrue(engine.config.dry_run)
+        self.assertIsNotNone(engine.portfolio)
+        # dry_run gerçekten uygulanmadı diye bir uyarı verilmiş olmalı
+        # (aynı reload'da başka hot-reloadable alan yoksa tek çağrı olurdu;
+        # burada sadece uyarının GERÇEKTEN gittiğini doğruluyoruz).
+        warning_calls = [c for c in mock_alert.call_args_list if "dry_run" in c.args[0]]
+        self.assertEqual(len(warning_calls), 1)
+
+    @patch("omnitrade.engine.ExchangeClient")
+    def test_kill_switch_state_survives_reload(self, mock_exchange_cls):
+        """RiskManager'ın kill-switch/günlük başlangıç equity durumu, config
+        reload sırasında nesne YENİDEN YARATILMADIĞI için korunmalı —
+        aksi halde alakasız bir config değişikliği (örn. yeni coin) aktif
+        bir kill-switch'i yanlışlıkla sıfırlayıp yeni pozisyon açılmasına
+        izin verebilirdi."""
+        engine = self._make_engine(pairs=["BTC/USDT"])
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _flat_df()
+        engine.run_once()
+
+        engine.portfolio.risk.update_daily_baseline(1000.0)
+        engine.portfolio.risk.check_kill_switch(current_equity=1.0)  # %99+ kayıp -> kill-switch
+        self.assertTrue(engine.portfolio.risk.kill_switch_active)
+
+        self._write_yaml(pairs=["BTC/USDT", "ETH/USDT"])
+        engine.run_once()
+
+        self.assertTrue(engine.portfolio.risk.kill_switch_active)  # korunmuş olmalı
 
 
 def _flat_df() -> pd.DataFrame:

@@ -695,6 +695,78 @@ bağımlılıkla serviliyor — projenin "ağır bağımlılık yok" ilkesini
 (bkz. README) bozacak bir framework geçişi bu fazın kapsamı dışında
 tutuldu.
 
+## Faz 13 — Config hot-reload: restart olmadan canlı uygulama ✅ Tamamlandı
+
+**Neden:** Faz 12'nin ilk hâli (görsel/UX cilası) kullanıcı tarafından
+yetersiz bulundu — asıl istenen tek tük renk/animasyon dokunuşu değil,
+gerçek bir mimari + UX gözden geçirmesiydi ("her şey dashboard'dan
+yönetilebilmeli", "manuel restart bekliyoruz, bu mimari doğru mu?").
+Yapılan denetimde (bkz. `PLAN.md` → Checkpoint bölümü) en somut, en
+gerçek mimari sorun şu çıktı: Faz 10 (coin ekle/çıkar) ve Faz 11 (tek
+tıkla strateji uygula) dashboard'dan `config.yaml`'ı güncelliyordu, ama
+ayrı bir container/süreç olan `bot`'un bunu fark etmesi için elle
+`docker compose restart bot` çalıştırmak gerekiyordu. Bu, "her şey
+dashboard'dan" hedefiyle doğrudan çelişen tek gerçek sürtünme noktasıydı.
+Rakip/mimari araştırması (bkz. PLAN.md) bunu doğruladı: Freqtrade gibi en
+olgun açık kaynak akranımız bile config değişikliğinde botu yeniden
+başlatıyor — ama bunu SÜREÇ KENDİSİ, bir komuta cevaben, otomatik
+yapıyor; insanın SSH'lanıp elle müdahale etmesi gerekmiyor. Faz 13 tam
+olarak bunu hedefliyor.
+
+**Değişen:**
+
+- **`omnitrade/engine.py`**:
+  - `TradingEngine.__init__` artık `config.config_path`'in mtime'ını
+    saklıyor (`self._config_mtime`).
+  - Yeni `_reload_config_if_changed()` — `run_once()`'un başında her
+    döngüde çağrılıyor: dosya mtime'ı değiştiyse `load_config()` ile
+    yeniden okuyup şu alanları ÇALIŞIRKEN, restart'sız uyguluyor:
+    `pairs`, `pair_strategies`, `strategy`/`strategy_params`
+    (varsayılan strateji), `poll_interval_seconds`, `risk`, `fee_pct`,
+    `slippage_pct`, `telegram`.
+  - **Bilinçli olarak restart-only bırakılanlar** (`_RESTART_ONLY_FIELDS`):
+    `dry_run`, `exchange.*`, `db_path`, `web_port`,
+    `live_trading_confirmed`. Bunlar ya bağlantı/süreç kurulumunu
+    değiştiriyor (exchange client, storage dosyası, HTTP portu) ya da
+    "canlı paraya geçiş" gibi bilinçli insan onayı gerektiriyor — bunları
+    sessizce çalışırken değiştirmek şaşırtıcı/riskli olurdu. Bu alanlarda
+    değişiklik algılanırsa restart gerektiği log + Telegram uyarısıyla
+    açıkça bildiriliyor, sessizce yok sayılmıyor.
+  - **RiskManager YENİDEN YARATILMIYOR, sadece `.config`'i güncelleniyor**
+    — bilerek: `RiskManager` stateful (kill-switch aktif mi, günün
+    başlangıç equity'si ne — bkz. `risk.py`). Reload'da nesneyi komple
+    değiştirmek, alakasız bir config değişikliğinde (örn. yeni coin
+    eklenince) aktif bir kill-switch'i sıfırlayıp yanlışlıkla yeni
+    pozisyon açılmasına izin verebilirdi. Aynı sebeple `Portfolio`
+    nesnesi de değiştirilmiyor, sadece `fee_pct`/`slippage_pct`/`risk`
+    alanları güncelleniyor.
+- **`omnitrade/web/server.py`**: `/api/config/pairs` ve
+  `/api/config/pair-strategy` yanıtlarındaki `restart_required` artık
+  her zaman `false` (alan adı geriye dönük uyumluluk için korundu),
+  mesajlar "bot bunu otomatik fark edecek, restart gerekmiyor" şeklinde
+  güncellendi. `dry_run: true` sınırı (Faz 11'deki bilinçli güvenlik
+  freni — canlı modda strateji override'ı dashboard'dan yapılamaz)
+  DEĞİŞMEDİ, bu ayrı ve hâlâ geçerli bir karar.
+- **`omnitrade/web/static/index.html`**: "Coin Yönetimi" panelindeki
+  açıklama, artık restart gerekmediğini yansıtacak şekilde güncellendi.
+- Testler: `tests/test_engine.py::TestConfigHotReload` (4 yeni test —
+  yeni coin eklenince botun onu bir sonraki `run_once()`'ta gerçekten
+  işlediğinin, pair_strategy override'ının hot-reload olduğunun,
+  restart-only bir alan (`dry_run`) değiştiğinde UYGULANMADIĞININ ama
+  uyarı verildiğinin, ve kill-switch durumunun reload'dan SAĞLAM
+  çıktığının doğrulanması), `tests/test_server.py`'deki
+  `restart_required` assertion'ları `False`'a güncellendi.
+  **Toplam: 129 → 133 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Web container'ına bot container'ını
+kontrol etme (docker socket, restart tetikleme vb.) yetkisi vermek.
+Faz 10'daki gerekçe hâlâ geçerli: web, dış dünyaya en yakın ve en az
+güvenilir yüzey — ona container kontrol yetkisi vermek orantısız bir
+blast-radius artışı olurdu. Bu fazda çözülen şey farklı: web hâlâ
+SADECE dosyayı yazıyor, ama artık bot kendi sürecinde, kendi rızasıyla,
+dosyayı düzenli aralıklarla kontrol edip DEĞİŞİKLİĞİ KENDİSİ
+uyguluyor — iki süreç arasında hiçbir yeni yetki/kanal açılmadı.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

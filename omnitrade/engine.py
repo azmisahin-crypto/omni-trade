@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
-from omnitrade.config import Config
+from omnitrade.config import Config, load_config
 from omnitrade.exchange import ExchangeClient
 from omnitrade.notifier.telegram import TelegramNotifier
 from omnitrade.portfolio import Portfolio
@@ -17,6 +18,21 @@ from omnitrade.storage import Storage
 from omnitrade.strategies import get_strategy
 
 log = logging.getLogger(__name__)
+
+# Faz 13: hot-reload edilebilen alanlar. Dashboard bu alanları zaten
+# `update_pairs`/`update_pair_strategies` ile dosyaya yazıyordu (Faz 10/11)
+# — eskiden botun bunu fark etmesi için CONTAINER YENİDEN BAŞLATILMASI
+# gerekiyordu. Artık bot her döngüde config.yaml'ın mtime'ını kontrol
+# ediyor, değiştiyse burada listelenen alanları çalışırken günceller.
+#
+# Bilinçli olarak DIŞARIDA bırakılanlar (hâlâ restart gerektirir):
+# dry_run, exchange.*, db_path, web_port, live_trading_confirmed.
+# Bunların hepsi ya süreç/bağlantı kurulumunu değiştirir (exchange client,
+# storage dosyası, HTTP portu) ya da "canlı paraya geçiş" gibi bilinçli bir
+# insan onayı gerektirir (bkz. README "Canlıya geçmeden önce"). Bu ikisini
+# çalışırken sessizce değiştirmek şaşırtıcı ve riskli olurdu; bunun yerine
+# değişiklik algılanırsa log/Telegram uyarısı verilir (bkz. _reload_config_if_changed).
+_RESTART_ONLY_FIELDS = ("dry_run", "db_path", "web_port", "live_trading_confirmed")
 
 
 class TradingEngine:
@@ -49,7 +65,101 @@ class TradingEngine:
         self.live_risk = RiskManager(config.risk)
         self._live_open_positions: set[str] = set()
 
+        # Faz 13: config.yaml'ın mtime'ını baz alıyoruz. İlk değer burada
+        # (henüz hiçbir döngü çalışmadan) sabitleniyor ki run_once()'daki
+        # ilk kontrol "değişiklik var" sanıp gereksiz bir reload denemesi
+        # yapmasın — sadece dosya GERÇEKTEN bu ilk andan SONRA değişirse
+        # reload tetiklenir.
+        self._config_mtime = self._stat_mtime(config.config_path)
+
+    @staticmethod
+    def _stat_mtime(path: str) -> float | None:
+        try:
+            return Path(path).stat().st_mtime
+        except OSError:
+            return None
+
+    def _reload_config_if_changed(self) -> None:
+        """config.yaml diskte değiştiyse (dashboard'daki coin ekle/çıkar ya da
+        "backtest sonucunu uygula" panelleri bunu yapar — bkz. web/server.py)
+        botu YENİDEN BAŞLATMADAN, çalışırken günceller.
+
+        Önceden (Faz 10/11) bu paneller sadece dosyayı güncelliyordu; botun
+        yeni ayarı fark etmesi için container'ın elle yeniden başlatılması
+        gerekiyordu. Bu, "her şey dashboard'dan yönetilebilmeli" hedefiyle
+        çelişen tek gerçek sürtünme noktasıydı — burada kapatılıyor.
+
+        Stateful nesneler (RiskManager: kill-switch/günlük zarar takibi,
+        Portfolio: bakiye/pozisyonlar) kasıtlı olarak YENİDEN
+        OLUŞTURULMUYOR, sadece ayarları (`*.config`/`fee_pct` vb.) güncelleniyor
+        — aksi halde örn. aktif bir kill-switch, config'teki alakasız bir
+        satır değiştiğinde (örn. yeni coin eklenince) sıfırlanıp yeniden
+        pozisyon açılmasına izin verebilirdi.
+        """
+        mtime = self._stat_mtime(self.config.config_path)
+        if mtime is None or mtime == self._config_mtime:
+            return
+        self._config_mtime = mtime
+
+        try:
+            fresh = load_config(self.config.config_path)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("config.yaml yeniden yüklenirken hata, mevcut ayarlarla devam ediliyor: %s", exc)
+            return
+
+        restart_needed = [
+            field for field in _RESTART_ONLY_FIELDS
+            if getattr(fresh, field) != getattr(self.config, field)
+        ]
+        if (fresh.exchange.name, fresh.exchange.api_key, fresh.exchange.api_secret) != (
+            self.config.exchange.name, self.config.exchange.api_key, self.config.exchange.api_secret,
+        ):
+            restart_needed.append("exchange")
+        if restart_needed:
+            msg = (
+                f"config.yaml'da {', '.join(restart_needed)} değişti ama bu alanlar "
+                "çalışırken uygulanamaz (bkz. engine.py _RESTART_ONLY_FIELDS) — "
+                "etkili olması için container'ın yeniden başlatılması gerekiyor."
+            )
+            log.warning(msg)
+            self.notifier.system_alert(msg)
+
+        added = sorted(set(fresh.pairs) - set(self.config.pairs))
+        removed = sorted(set(self.config.pairs) - set(fresh.pairs))
+
+        self.config.pairs = fresh.pairs
+        self.config.pair_strategies = fresh.pair_strategies
+        self.config.strategy = fresh.strategy
+        self.config.strategy_params = fresh.strategy_params
+        self.config.poll_interval_seconds = fresh.poll_interval_seconds
+        self.config.fee_pct = fresh.fee_pct
+        self.config.slippage_pct = fresh.slippage_pct
+        self.config.risk = fresh.risk
+        self.config.telegram = fresh.telegram
+
+        self.strategy = get_strategy(fresh.strategy, fresh.strategy_params)
+        self.strategies = {
+            symbol: get_strategy(spec["strategy"], spec.get("params", {}))
+            for symbol, spec in fresh.pair_strategies.items()
+        }
+        # RiskManager'ı yeniden yaratmak yerine sadece config'ini değiştir —
+        # kill-switch/günlük başlangıç equity durumu (bkz. risk.py) korunur.
+        self.live_risk.config = fresh.risk
+        if self.portfolio is not None:
+            self.portfolio.risk.config = fresh.risk
+            self.portfolio.fee_pct = fresh.fee_pct
+            self.portfolio.slippage_pct = fresh.slippage_pct
+
+        summary = "config.yaml değişikliği canlı olarak uygulandı."
+        if added:
+            summary += f" Eklenen coin: {', '.join(added)}."
+        if removed:
+            summary += f" Çıkarılan coin: {', '.join(removed)}."
+        log.info(summary)
+        self.notifier.system_alert(summary)
+
     def run_once(self) -> None:
+        self._reload_config_if_changed()
         last_prices: dict[str, float] = {}
         for symbol in self.config.pairs:
             strategy = self.strategies.get(symbol, self.strategy)

@@ -300,16 +300,17 @@ def make_handler(storage: Storage, config: Config):
             değiştirilebiliyordu. Gövde: `{"symbol": "SOL/USDT", "action":
             "add"|"remove"}`.
 
-            Bilerek YAPILMAYAN: bu isteğin çalışan bot sürecini (ayrı
-            container) canlı olarak etkilemesi — config sadece dosyaya
-            yazılır, bot'un yeni pariteyi görmesi için yeniden başlatılması
-            gerekir. Bu yüzden yanıt her zaman `restart_required: true`
-            döner ve dashboard bunu kullanıcıya açıkça gösterir. Otomatik
-            restart (örn. docker socket üzerinden) bilinçli olarak
-            eklenmedi — web container'ına docker'ı kontrol etme yetkisi
-            vermek, "canlı pariteyi dashboard'dan değiştirebilme"
-            kolaylığına göre orantısız bir güvenlik/blast-radius artışı
-            olurdu.
+            Faz 13 güncellemesi: bu istek hâlâ SADECE dosyayı yazıyor (web
+            ve bot ayrı container/süreçler, web'e bot'u kontrol etme yetkisi
+            vermek — örn. docker socket üzerinden — orantısız bir güvenlik/
+            blast-radius artışı olurdu, bu karar değişmedi). AMA artık bot
+            kendi döngüsünde `config.yaml`'ın mtime'ını kontrol edip
+            değişikliği KENDİSİ fark ediyor (bkz. engine.py
+            `_reload_config_if_changed`) — yani elle
+            `docker compose restart bot` çalıştırmaya gerek kalmadı, en geç
+            bir sonraki poll döngüsünde (`poll_interval_seconds`) otomatik
+            uygulanıyor. Yanıttaki `restart_required` alanı artık hep
+            `false` — geriye dönük uyumluluk için alan adı korundu.
             """
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
@@ -364,11 +365,11 @@ def make_handler(storage: Storage, config: Config):
 
             self._json({
                 "pairs": new_pairs,
-                "restart_required": True,
+                "restart_required": False,
                 "message": (
-                    "config.yaml güncellendi. Çalışan bota bunu fark "
-                    "ettirmek için `docker compose restart bot` (ya da "
-                    "`deploy.sh`) çalıştırman gerekiyor."
+                    "config.yaml güncellendi — bot bunu bir sonraki "
+                    "döngüsünde (en geç birkaç dakika içinde) otomatik "
+                    "fark edecek, restart gerekmiyor."
                 ),
             })
 
@@ -461,11 +462,11 @@ def make_handler(storage: Storage, config: Config):
 
             self._json({
                 "pair_strategies": pair_strategies,
-                "restart_required": True,
+                "restart_required": False,
                 "message": (
-                    "config.yaml güncellendi. Çalışan bota bunu fark "
-                    "ettirmek için `docker compose restart bot` (ya da "
-                    "`deploy.sh`) çalıştırman gerekiyor."
+                    "config.yaml güncellendi — bot bunu bir sonraki "
+                    "döngüsünde otomatik fark edecek, restart gerekmiyor "
+                    "(bkz. Faz 13)."
                 ),
             })
 

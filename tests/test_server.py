@@ -272,7 +272,9 @@ class TestConfigPairsEndpoint(ServerTestBase):
         status, body = self._post_json("/api/config/pairs", {"symbol": "sol/usdt", "action": "add"})
         self.assertEqual(status, 200)
         self.assertEqual(body["pairs"], ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
-        self.assertTrue(body["restart_required"])
+        # Faz 13: artık restart gerekmiyor, bot değişikliği kendi
+        # döngüsünde otomatik fark ediyor (bkz. engine.py hot-reload testleri).
+        self.assertFalse(body["restart_required"])
         self.assertEqual(self.config.pairs, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
         self.assertIn("SOL/USDT", self.config_path.read_text())
         self.assertIn("dry_run: true", self.config_path.read_text())
@@ -341,7 +343,7 @@ class TestConfigPairStrategyEndpoint(ServerTestBase):
         })
         self.assertEqual(status, 200)
         self.assertEqual(body["pair_strategies"], {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}})
-        self.assertTrue(body["restart_required"])
+        self.assertFalse(body["restart_required"])  # Faz 13: otomatik hot-reload
         self.assertEqual(self.config.pair_strategies, {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}})
         text = self.config_path.read_text()
         self.assertIn("ETH/USDT", text)
