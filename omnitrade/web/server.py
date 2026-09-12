@@ -13,14 +13,50 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import yaml
+
 from omnitrade.backtest import run_backtest, run_walk_forward
-from omnitrade.config import Config, normalize_pair, update_pair_strategies, update_pairs
+from omnitrade.config import Config, normalize_pair, update_pair_strategies, update_pairs, update_scalar
 from omnitrade.exchange import ExchangeClient
 from omnitrade.stats import compute_drawdown_curve, compute_summary_stats
 from omnitrade.storage import Storage
 from omnitrade.strategies import get_strategy, list_strategies
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Faz 16: canlıya geçiş TEK istekle yapılamaz — kullanıcının bu tam metni
+# `confirm_text` alanında birebir göndermesi gerekir ("şifre tekrarı veya
+# sabit onay metni" şartının ikinci seçeneği, bkz. AUDIT_REPORT.md §6.1).
+# Dry-run'a DÖNMEK bir güvenlik freni gerektirmez (kill-switch mantığıyla
+# tutarlı — riski azaltan işlemler hızlı olmalı), bu yüzden sadece
+# go_live için zorunlu.
+LIVE_MODE_CONFIRM_PHRASE = "CANLIYA GEÇİYORUM, RİSKİ ANLADIM"
+
+# poll_interval_seconds için makul sınırlar — çok düşük değer borsayı
+# gereksiz yere yorar/rate-limit'e takılır, çok yüksek değer botu
+# anlamsızca yavaşlatır.
+MIN_POLL_INTERVAL_SECONDS = 5
+MAX_POLL_INTERVAL_SECONDS = 86400
+
+
+def _read_scalar_fields(config_path: str) -> dict:
+    """`config.yaml`'ı DİSKTEN taze okuyup birkaç üst-seviye skaler alanı
+    döner — `/api/system`'in "dosyada gerçekte ne yazıyor" bilgisini bu
+    WEB sürecinin kendi bellekteki (potansiyel olarak eski) `Config`
+    nesnesinden bağımsız verebilmesi için. Dosya yoksa ya da bozuksa boş
+    dict döner (çağıran taraf bellekteki değere düşer)."""
+    try:
+        raw = yaml.safe_load(Path(config_path).read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    out = {}
+    if "dry_run" in raw:
+        out["dry_run"] = bool(raw["dry_run"])
+    if "live_trading_confirmed" in raw:
+        out["live_trading_confirmed"] = bool(raw["live_trading_confirmed"])
+    if "poll_interval_seconds" in raw:
+        out["poll_interval_seconds"] = int(raw["poll_interval_seconds"])
+    return out
 
 
 def make_handler(storage: Storage, config: Config):
@@ -58,6 +94,21 @@ def make_handler(storage: Storage, config: Config):
             return hmac.compare_digest(username, config.web_auth.username) and hmac.compare_digest(
                 password, config.web_auth.password
             )
+
+        def _basic_auth_username(self) -> str:
+            """Faz 16: denetim kaydına kimin değişiklik yaptığını yazmak
+            için Authorization header'ından kullanıcı adını okur. Sadece
+            görüntüleme/log amaçlı — yetkilendirme kararı hâlâ
+            `_authorized()`'da veriliyor."""
+            header = self.headers.get("Authorization", "")
+            if not header.startswith("Basic "):
+                return ""
+            try:
+                decoded = base64.b64decode(header[6:]).decode("utf-8")
+                username, _, _ = decoded.partition(":")
+                return username
+            except Exception:  # noqa: BLE001
+                return ""
 
         def _require_auth(self) -> bool:
             if self._authorized():
@@ -119,6 +170,37 @@ def make_handler(storage: Storage, config: Config):
                     "dry_run": config.dry_run,
                     "pair_strategies": config.pair_strategies,
                 })
+            elif path == "/api/system":
+                # Faz 16: dashboard'un "hangi modda çalışıyoruz" panelini
+                # besler. `runtime` bu WEB sürecinin bellekteki config'i
+                # (yani en son BU süreçten yapılan değişiklikler dahil);
+                # `config_file` diskteki config.yaml'ın GÜNCEL hali —
+                # `dry_run`/`live_trading_confirmed` restart-only alanlar
+                # olduğundan (bkz. engine.py _RESTART_ONLY_FIELDS), bot
+                # süreci dosyada yazan değeri ancak yeniden başladığında
+                # uygular. İkisi arasındaki fark varsa `restart_required`
+                # true döner ki dashboard bunu açıkça göstersin.
+                file_values = _read_scalar_fields(config.config_path)
+                file_dry_run = file_values.get("dry_run", config.dry_run)
+                file_confirmed = file_values.get("live_trading_confirmed", config.live_trading_confirmed)
+                self._json({
+                    "runtime": {
+                        "dry_run": config.dry_run,
+                        "live_trading_confirmed": config.live_trading_confirmed,
+                        "poll_interval_seconds": config.poll_interval_seconds,
+                    },
+                    "config_file": {
+                        "dry_run": file_dry_run,
+                        "live_trading_confirmed": file_confirmed,
+                    },
+                    "restart_required": (
+                        file_dry_run != config.dry_run or file_confirmed != config.live_trading_confirmed
+                    ),
+                    "web_auth_enabled": config.web_auth.enabled,
+                })
+            elif path == "/api/system/audit-log":
+                limit = int((query.get("limit") or [100])[0])
+                self._json(storage.get_mode_audit_log(limit=limit))
             elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
             elif path == "/app.js":
@@ -138,6 +220,10 @@ def make_handler(storage: Storage, config: Config):
                 self._handle_config_pairs()
             elif parsed.path == "/api/config/pair-strategy":
                 self._handle_config_pair_strategy()
+            elif parsed.path == "/api/system/poll-interval":
+                self._handle_poll_interval()
+            elif parsed.path == "/api/system/live-mode":
+                self._handle_live_mode()
             else:
                 self.send_error(404)
 
@@ -508,6 +594,149 @@ def make_handler(storage: Storage, config: Config):
                     "config.yaml güncellendi — bot bunu bir sonraki "
                     "döngüsünde otomatik fark edecek, restart gerekmiyor "
                     "(bkz. Faz 13)."
+                ),
+            })
+
+        def _handle_poll_interval(self):
+            """Faz 16: poll aralığını dashboard'dan değiştir. Bu alan
+            restart-only DEĞİL (bkz. engine.py `_RESTART_ONLY_FIELDS`) —
+            bot bir sonraki döngüsünde config.yaml'ın mtime değişikliğini
+            fark edip otomatik uygular, tıpkı coin/strateji override'ları
+            gibi (Faz 13). Bu yüzden burada özel bir onay adımına gerek
+            yok, sadece makul bir aralık doğrulaması var.
+            """
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            try:
+                seconds = int(req.get("seconds"))
+            except (TypeError, ValueError):
+                self._json({"error": "'seconds' tam sayı olmalı."}, status=400)
+                return
+
+            if not (MIN_POLL_INTERVAL_SECONDS <= seconds <= MAX_POLL_INTERVAL_SECONDS):
+                self._json({
+                    "error": (
+                        f"'seconds' {MIN_POLL_INTERVAL_SECONDS} ile "
+                        f"{MAX_POLL_INTERVAL_SECONDS} arasında olmalı."
+                    ),
+                }, status=400)
+                return
+
+            try:
+                update_scalar(config.config_path, "poll_interval_seconds", seconds)
+            except OSError as exc:
+                self._json({"error": f"config.yaml yazılamadı: {exc}"}, status=500)
+                return
+
+            config.poll_interval_seconds = seconds
+
+            self._json({
+                "poll_interval_seconds": seconds,
+                "restart_required": False,
+                "message": (
+                    "config.yaml güncellendi — bot bunu bir sonraki "
+                    "döngüsünde otomatik fark edecek, restart gerekmiyor."
+                ),
+            })
+
+        def _handle_live_mode(self):
+            """Faz 16: canlı/dry-run modu arasında geçiş — AUDIT_REPORT.md
+            §6.1'de tanımlanan üç ön koşulla:
+
+            1. `config.web_auth.enabled` kapalıyken bu uç nokta TAMAMEN
+               reddedilir (403) — diğer düşük riskli uçlardan farklı
+               olarak, kimlik doğrulama açık olsa bile buraya erişim
+               "auth kapalıysa herkese serbest" kuralına tabi DEĞİL.
+            2. Canlıya geçiş (`go_live`) tek istekle yapılamaz — gövdede
+               `confirm_text` alanında `LIVE_MODE_CONFIRM_PHRASE`'in
+               BİREBİR gönderilmesi zorunlu. Dry-run'a dönüş (`go_dry_run`)
+               riski azaltan bir işlem olduğundan bu ek adımı gerektirmez.
+            3. Her iki yöndeki her değişiklik, ayrı/salt-okunur
+               `mode_audit_log` tablosuna (kim/ne zaman/hangi IP/eski->yeni
+               değer) yazılır (bkz. storage.py).
+
+            Not: `dry_run` bir restart-only alan olduğu için (bkz. engine.py
+            `_RESTART_ONLY_FIELDS`) bu uç nokta config.yaml'ı günceller ama
+            ÇALIŞAN bot süreci bunu ancak yeniden başlatıldığında uygular —
+            yanıt bunu `restart_required: true` ile açıkça belirtir, aksini
+            iddia etmez.
+            """
+            if not config.web_auth.enabled:
+                self._json({
+                    "error": (
+                        "Canlı/dry-run modu değiştirme uç noktası, dashboard "
+                        "kimlik doğrulaması (web_auth.enabled) açık olmadan "
+                        "kullanılamaz. Önce config.yaml'da web_auth.enabled: "
+                        "true yap ve WEB_AUTH_PASSWORD'ü .env'de ayarla."
+                    ),
+                }, status=403)
+                return
+
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            action = req.get("action")
+            if action not in ("go_live", "go_dry_run"):
+                self._json({"error": "'action' 'go_live' ya da 'go_dry_run' olmalı."}, status=400)
+                return
+
+            old_dry_run = config.dry_run
+            old_confirmed = config.live_trading_confirmed
+
+            if action == "go_live":
+                confirm_text = req.get("confirm_text") or ""
+                if confirm_text != LIVE_MODE_CONFIRM_PHRASE:
+                    self._json({
+                        "error": (
+                            "Canlıya geçmek için 'confirm_text' alanında şu metni "
+                            f"BİREBİR göndermen gerekiyor: \"{LIVE_MODE_CONFIRM_PHRASE}\""
+                        ),
+                        "required_confirm_text": LIVE_MODE_CONFIRM_PHRASE,
+                    }, status=400)
+                    return
+                new_dry_run, new_confirmed = False, True
+            else:
+                new_dry_run, new_confirmed = True, False
+
+            try:
+                update_scalar(config.config_path, "dry_run", new_dry_run)
+                update_scalar(config.config_path, "live_trading_confirmed", new_confirmed)
+            except OSError as exc:
+                self._json({"error": f"config.yaml yazılamadı: {exc}"}, status=500)
+                return
+
+            config.dry_run = new_dry_run
+            config.live_trading_confirmed = new_confirmed
+
+            storage.log_mode_change(
+                action=action,
+                old_dry_run=old_dry_run, new_dry_run=new_dry_run,
+                old_live_trading_confirmed=old_confirmed, new_live_trading_confirmed=new_confirmed,
+                username=self._basic_auth_username(), ip=self.client_address[0],
+            )
+
+            self._json({
+                "dry_run": new_dry_run,
+                "live_trading_confirmed": new_confirmed,
+                "restart_required": True,
+                "message": (
+                    "config.yaml güncellendi. ANCAK dry_run restart-only bir "
+                    "alan — çalışan bot süreci bunu ancak yeniden "
+                    "başlatıldığında (örn. `docker compose restart bot`) "
+                    "uygulayacak; o ana kadar bot ESKİ modda çalışmaya devam "
+                    "eder. LIVE_TRADING_CHECKLIST.md'yi gözden geçirmeden "
+                    "restart atma."
                 ),
             })
 

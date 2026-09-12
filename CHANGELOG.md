@@ -843,6 +843,82 @@ PLAN.md checkpoint — bilinçli sıralama: önce temel, sonra görünüm).
 **Kasıtlı olarak yapılMAYAN:** Bir frontend framework'üne geçiş —
 gerekçe Faz 12'dekiyle aynı (bkz. yukarısı), hâlâ geçerli.
 
+## Faz 16 — Canlı/dry-run modu + poll aralığı UI'dan ✅ Tamamlandı
+
+**Neden:** Faz 15 sonrası bağımsız denetim (`AUDIT_REPORT.md`), "hangi
+modda olduğunu ve geçiş adımlarını dashboard'da görünür kılmak" fikrini
+işaretlemiş, ama bunu üç zorunlu ön koşula bağlamıştı (§6.1) — çünkü bu,
+diğer Faz 10/11/13 uçlarından farklı olarak GERÇEK PARA riskini
+doğrudan etkileyen bir state değişikliği. Bu faz o üç ön koşulu
+karşılayacak şekilde uygulandı; hiçbiri atlanmadı.
+
+**Değişenler:**
+
+- **`omnitrade/storage.py`**: yeni `mode_audit_log` tablosu +
+  `log_mode_change()` (sadece INSERT) + `get_mode_audit_log()` (sadece
+  SELECT). Bilinçli olarak UPDATE/DELETE yapan hiçbir metod YOK — tablo
+  API üzerinden izole ve salt-okunur (§6.1 madde 3).
+- **`omnitrade/config.py`**: yeni `update_scalar(config_path, key,
+  value)` — `update_pairs`/`update_pair_strategies` ile aynı gerekçeyle
+  (yorumları/hizalamayı koru, tüm dosyayı `yaml.safe_dump` ile yeniden
+  yazma) tek bir üst-seviye skaler alanı yerinde günceller. `dry_run`,
+  `live_trading_confirmed`, `poll_interval_seconds` için kullanılıyor.
+- **`omnitrade/web/server.py`**:
+  - `GET /api/system` — `runtime` (bu web sürecinin bellekteki config'i)
+    ile `config_file`'ı (diskten TAZE okunan değer) yan yana döner,
+    ikisi arasında fark varsa `restart_required: true`. `dry_run`/
+    `live_trading_confirmed` restart-only alanlar olduğu için (bkz.
+    `engine.py` `_RESTART_ONLY_FIELDS`, bu faz onu DEĞİŞTİRMEDİ —
+    bilinçli), bu fark gerçek bir sinyal.
+  - `GET /api/system/audit-log` — `mode_audit_log`'u en yeni üstte döner.
+  - `POST /api/system/poll-interval` — `poll_interval_seconds` hot-reload
+    edilebilir bir alan olduğu için (Faz 13) burada özel bir onay adımı
+    YOK, sadece `[5, 86400]` aralık doğrulaması. `restart_required`
+    her zaman `false`.
+  - `POST /api/system/live-mode` — asıl hassas uç, üç ön koşul burada:
+    1. `config.web_auth.enabled == False` iken İSTEK NE OLURSA OLSUN
+       403 döner — diğer uçların "auth kapalıysa serbest" kuralına
+       TABİ DEĞİL (§6.1 madde 1).
+    2. `action: "go_live"` gövdede `confirm_text` alanında sabit metni
+       (`LIVE_MODE_CONFIRM_PHRASE = "CANLIYA GEÇİYORUM, RİSKİ ANLADIM"`)
+       BİREBİR içermeli — yoksa/yanlışsa 400, config.yaml'a hiçbir şey
+       yazılmaz, audit log'a hiçbir şey eklenmez (§6.1 madde 2).
+       `action: "go_dry_run"` bu adımı gerektirmez — riski azaltan işlem
+       (kill-switch mantığı) sürtünmesiz olmalı.
+    3. Başarılı her değişiklik (her iki yönde de) `storage.log_mode_change()`
+       ile denetim kaydına yazılır — kullanıcı adı (`Authorization`
+       header'ından), IP (`self.client_address`), eski/yeni `dry_run` ve
+       `live_trading_confirmed` değerleri (§6.1 madde 3).
+    Yanıt her zaman `restart_required: true` döner ve bunu net bir
+    mesajla açıklar — "config.yaml güncellendi ama bot süreci ancak
+    restart'ta uygular" diyerek yanlış bir "anında etkili oldu" izlenimi
+    VERMEZ.
+- **`omnitrade/web/static/index.html` + `app.js`**: yeni "Sistem & Mod"
+  sekmesi — config.yaml'daki mod vs. çalışan web sürecinin bildiği mod
+  (rozet + restart uyarısı), poll aralığı formu, `LIVE_TRADING_CHECKLIST.md`'nin
+  kısa özeti (salt bilgilendirme, kutucuklar hiçbir yere kaydedilmiyor —
+  "işaretlemek" güvenlik kontrolü YERİNE GEÇMEZ), "Canlıya Geç"/"Dry-Run'a
+  Dön" butonları, ve denetim kaydı tablosu. Onay metni modal'a SUNUCUDAN
+  alınıyor (`confirm_text` BOŞ göndererek — 400 döner ama hiçbir şeyi
+  değiştirmez/loglamaz, sadece `required_confirm_text` alanını okumak
+  için) — böylece metin iki yerde (frontend+backend) ayrı ayrı
+  tanımlanıp birbirinden sapma riski taşımıyor.
+- **Testler**: `TestUpdateScalar` (config.py), `TestModeAuditLog`
+  (storage.py), `TestSystemEndpoint` + `TestLiveModeEndpoint` +
+  `TestLiveModeEndpointWithAuthEnabled` (server.py) — 137 → 156 test,
+  hepsi yeşil. Gerçek bir `ThreadingHTTPServer` + `omnitrade.cli web`
+  ile de elle uçtan uca doğrulandı (go_live/go_dry_run/poll-interval,
+  config.yaml'daki yorumların bozulmadığı, audit log'un doğru
+  kaydedildiği).
+
+**Kasıtlı olarak yapılMAYAN:** `dry_run`'ı hot-reload edilebilir hale
+getirmek. Bu, exchange client'ı ve process kurulumunu değiştiren bir
+alan (bkz. Faz 13 tasarım notu) — dashboard'dan "canlıya geç" demek,
+"restart'a gerek kalmadan botu anında canlıya çevirmek" ile
+KARIŞTIRILMAMALI. Restart hâlâ bilinçli bir insan eylemi olarak kalıyor,
+sadece config.yaml'ı elle düzenleme + iki ayrı dosyayı (dry_run +
+live_trading_confirmed) senkron tutma zahmeti dashboard'a taşındı.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

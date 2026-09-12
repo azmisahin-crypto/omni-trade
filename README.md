@@ -144,6 +144,23 @@ Dashboard artık şunları da gösterir:
   stratejiyi görmesi için yeniden başlatılması gerekir. Zaten override'ı
   olan bir coin için "Override'ı kaldır" butonu görünür, tekrar genel
   varsayılana döner.
+- **Sistem & Mod sekmesi (Faz 16)**: dashboard artık `config.yaml`'daki
+  mod ile çalışan bot sürecinin bildiği modu yan yana gösterir (aynı
+  değilse "restart gerekiyor" uyarısı çıkar), poll aralığını tek tıkla
+  değiştirir (`POST /api/system/poll-interval` — hot-reload, restart
+  gerekmez) ve canlı/dry-run geçişini yönetir
+  (`POST /api/system/live-mode`). Canlıya geçiş bilinçli olarak
+  **sürtünmeli**: (1) sadece `web_auth.enabled: true` iken kullanılabilir
+  — kapalıyken uç nokta 403 döner; (2) tek istekle olmaz, sabit bir onay
+  metnini birebir yazmayı gerektirir; (3) her geçiş (her iki yönde de)
+  `mode_audit_log` tablosuna (kim/ne zaman/hangi IP/eski→yeni değer)
+  yazılır — bu tabloyu güncelleyen/silen hiçbir uç nokta yok, sadece
+  ekleyen ve okuyan var. Dry-run'a dönüş tek tıkla ve onay metni
+  gerektirmeden yapılabilir (kill-switch mantığı — riski azaltan işlem
+  hızlı olmalı). **Önemli:** `dry_run` restart-only bir alan olduğu için
+  (bkz. `engine.py`), bu ekrandan yapılan bir geçiş de config.yaml'ı
+  günceller ama çalışan `bot` container'ının bunu uygulaması için
+  yeniden başlatılması gerekir — panel bunu her zaman açıkça belirtir.
 
 ## 4. Telegram bildirimleri
 
@@ -256,6 +273,11 @@ için bilinçli bir tasarım tercihi).
 - Ayrıntılı go/no-go kontrol listesi için `LIVE_TRADING_CHECKLIST.md`'ye,
   gerekçeler için `CHANGELOG.md`'ye bak.
 - Ayrıntılı planlar için `PLAN.md`dosyasına bak.
+- Dashboard'un "Sistem & Mod" sekmesinden de canlıya geçebilirsin (bkz.
+  yukarıdaki Faz 16 notu) — ama bu, yukarıdaki maddeleri (özellikle
+  checklist'i) atlamanın yerine geçmez; panel sadece elle `config.yaml`
+  düzenleme + restart adımlarını tek bir yerden, ek bir onay adımıyla
+  yapmanı sağlıyor.
 
 ## Testler
 

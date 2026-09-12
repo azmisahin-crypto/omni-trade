@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from omnitrade.config import load_config, normalize_pair, update_pair_strategies, update_pairs
+from omnitrade.config import (
+    load_config,
+    normalize_pair,
+    update_pair_strategies,
+    update_pairs,
+    update_scalar,
+)
 
 
 class TestLoadConfig(unittest.TestCase):
@@ -182,6 +188,42 @@ class TestUpdatePairs(unittest.TestCase):
         cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
         self.assertEqual(cfg.pairs, ["BTC/USDT"])
         self.assertIn("dry_run: true", config_path.read_text())
+
+
+class TestUpdateScalar(unittest.TestCase):
+    """Faz 16: `update_scalar` — dry_run/live_trading_confirmed/
+    poll_interval_seconds gibi basit üst-seviye alanları yerinde günceller."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = Path(self._tmpdir.name) / "config.yaml"
+
+    def test_replaces_boolean_value_and_preserves_trailing_comment(self):
+        self.config_path.write_text(
+            "dry_run: true             # true = sahte para\npairs:\n  - BTC/USDT\n"
+        )
+        update_scalar(str(self.config_path), "dry_run", False)
+        text = self.config_path.read_text()
+        self.assertIn("dry_run: false             # true = sahte para", text)
+        self.assertIn("pairs:\n  - BTC/USDT", text)
+
+    def test_replaces_integer_value(self):
+        self.config_path.write_text("poll_interval_seconds: 60  # yorum\n")
+        update_scalar(str(self.config_path), "poll_interval_seconds", 30)
+        self.assertIn("poll_interval_seconds: 30  # yorum", self.config_path.read_text())
+
+    def test_appends_key_when_missing_from_file(self):
+        self.config_path.write_text("pairs:\n  - BTC/USDT\n")
+        update_scalar(str(self.config_path), "live_trading_confirmed", True)
+        self.assertIn("live_trading_confirmed: true", self.config_path.read_text())
+
+    def test_does_not_affect_other_similarly_named_keys(self):
+        self.config_path.write_text("dry_run: true\ndry_run_wallet: 50\n")
+        update_scalar(str(self.config_path), "dry_run", False)
+        text = self.config_path.read_text()
+        self.assertIn("dry_run: false", text)
+        self.assertIn("dry_run_wallet: 50", text)
 
 
 class TestUpdatePairStrategies(unittest.TestCase):

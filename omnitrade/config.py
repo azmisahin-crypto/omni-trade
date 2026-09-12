@@ -205,6 +205,48 @@ def update_pairs(config_path: str, pairs: list) -> None:
     path.write_text(text)
 
 
+def update_scalar(config_path: str, key: str, value: bool | int | float | str) -> None:
+    """`config.yaml`'daki basit bir üst-seviye skaler alanı (`dry_run:`,
+    `live_trading_confirmed:`, `poll_interval_seconds:` gibi) YERİNDE
+    günceller — `update_pairs`/`update_pair_strategies` ile aynı gerekçeyle
+    (satır sonu yorumları koru, `yaml.safe_dump` ile tüm dosyayı yeniden
+    yazma) sadece o anahtarın satırını hedefleyen bir metin değişikliği
+    yapar.
+
+    Faz 16: dashboard'dan canlı/dry-run modu ve poll aralığı değiştirme
+    bunu kullanıyor. Booleanlar `true`/`false` (YAML/config.yaml'daki
+    mevcut yazım biçimiyle tutarlı) olarak yazılır.
+    """
+    bool_str = {True: "true", False: "false"}
+    val_str = bool_str.get(value, str(value)) if isinstance(value, bool) else str(value)
+
+    path = Path(config_path)
+    text = path.read_text() if path.exists() else ""
+
+    # Değer tek bir token (bool/sayı) olduğu için `\S*` ile yakalanır; ondan
+    # sonraki boşluk + `# ...` yorumu (varsa) AYNEN korunur — sadece değer
+    # değişir, yorumun kendisi ve öncesindeki hizalama boşluğu dokunulmadan
+    # kalır.
+    pattern = re.compile(
+        rf"^{re.escape(key)}:[ \t]*\S*(?P<spacing>[ \t]*)(?P<comment>#.*)?$", re.MULTILINE
+    )
+
+    def _sub(m: re.Match) -> str:
+        comment = m.group("comment")
+        if comment:
+            return f"{key}: {val_str}{m.group('spacing')}{comment}"
+        return f"{key}: {val_str}"
+
+    if pattern.search(text):
+        text = pattern.sub(_sub, text, count=1)
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += f"{key}: {val_str}\n"
+
+    path.write_text(text)
+
+
 def _yaml_key_block(key: str, value: dict) -> str:
     """`key:` başlığı altına, 2 boşluk girintiyle, `value` dict'ini YAML
     olarak render eder. Boş dict için tek satırlık `key: {}` döner —

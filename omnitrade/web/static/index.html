@@ -200,6 +200,14 @@
   .bt-apply-row button.secondary { background: #2a2e37; color: var(--text); }
   .bt-apply-row button.secondary:hover { background: #3a3f4b; }
 
+  #sysGoLive, #confirmPhraseSubmit { background: var(--red); color: #1a0d0d; padding: 10px 16px; font-size: 13px; }
+  #sysGoLive:hover, #confirmPhraseSubmit:hover { background: #ef4444; }
+  #sysGoDryRun { background: #16a34a; color: #fff; padding: 10px 16px; font-size: 13px; }
+  #sysGoDryRun:hover { background: #15803d; }
+  .mode-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+  .mode-pill.dry { background: var(--green-bg); color: var(--green); }
+  .mode-pill.live { background: var(--red-bg); color: var(--red); }
+
   .pair-chips { display: flex; gap: 8px; flex-wrap: wrap; }
   .pair-chip { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 6px 8px 6px 14px; font-size: 13px; font-weight: 600; }
   .pair-chip button { background: #2a2e37; color: var(--red); border-radius: 50%; width: 20px; height: 20px; line-height: 1; font-size: 13px; padding: 0; }
@@ -245,6 +253,7 @@
       <button class="tab-btn" data-panel="panel-leaderboard" type="button">Karşılaştırma</button>
       <button class="tab-btn" data-panel="panel-performance" type="button">Equity &amp; Drawdown</button>
       <button class="tab-btn" data-panel="panel-trades" type="button">İşlemler</button>
+      <button class="tab-btn" data-panel="panel-system" type="button">Sistem &amp; Mod</button>
     </nav>
 
     <main id="panels">
@@ -381,7 +390,107 @@
           </div>
         </div>
       </section>
+      <section class="panel" id="panel-system">
+        <div class="card">
+          <h2><span class="icon">🛡️</span>Çalışma Modu</h2>
+          <p class="card-desc">
+            <code>dry_run</code> restart-only bir alan (bkz. <code>engine.py</code>) —
+            burada yapılan bir değişiklik <code>config.yaml</code>'ı günceller ama
+            çalışan bot süreci bunu ancak <strong>yeniden başlatıldığında</strong>
+            uygular. Canlıya geçiş öncesi mutlaka
+            <code>LIVE_TRADING_CHECKLIST.md</code>'yi gözden geçir (aşağıda özetlendi).
+          </p>
+          <div class="stats-row">
+            <div class="stat">
+              <div class="label">config.yaml'daki mod</div>
+              <div class="value" id="sysFileMode">–</div>
+            </div>
+            <div class="stat">
+              <div class="label">Bu web sürecinin bildiği mod</div>
+              <div class="value" id="sysRuntimeMode">–</div>
+            </div>
+            <div class="stat">
+              <div class="label">Poll aralığı</div>
+              <div class="value" id="sysPollValue">–</div>
+            </div>
+          </div>
+          <div id="sysRestartBanner" class="bt-status error" style="display:none; margin-top:10px;">
+            ⚠️ config.yaml ile çalışan bot süreci farklı modda — değişikliğin
+            uygulanması için botu yeniden başlat.
+          </div>
+          <div id="sysAuthWarning" class="bt-status error" style="display:none; margin-top:10px;">
+            ⚠️ <code>web_auth.enabled</code> kapalı olduğu için canlıya geçiş
+            uç noktası tamamen devre dışı (bilinçli güvenlik freni).
+            Önce dashboard kimlik doğrulamasını aç.
+          </div>
+
+          <div class="bt-apply-row" style="margin-top:16px;">
+            <button id="sysGoLive" type="button">Canlıya Geç</button>
+            <button id="sysGoDryRun" type="button" class="secondary">Dry-Run'a Dön</button>
+          </div>
+          <div id="sysModeStatus" class="bt-status"></div>
+        </div>
+
+        <div class="card">
+          <h2><span class="icon">⏱️</span>Poll Aralığı</h2>
+          <p class="card-desc">
+            Botun her döngü arasında ne kadar bekleyeceği (saniye). Bu alan
+            hot-reload edilebilir — restart gerekmez, bot bir sonraki
+            döngüsünde otomatik fark eder.
+          </p>
+          <div class="backtest-form">
+            <label>Saniye
+              <input id="sysPollInput" type="number" min="5" max="86400" value="60" />
+            </label>
+            <button id="sysPollApply" type="button">Uygula</button>
+          </div>
+          <div id="sysPollStatus" class="bt-status"></div>
+        </div>
+
+        <div class="card">
+          <h2><span class="icon">✅</span>Canlıya Geçiş Checklist (özet)</h2>
+          <p class="card-desc">
+            Tam liste: <code>LIVE_TRADING_CHECKLIST.md</code>. Buradaki
+            kutucuklar herhangi bir yere kaydedilmez — sadece hatırlatma
+            amaçlıdır, "işaretlemek" güvenlik kontrolü YERİNE GEÇMEZ.
+          </p>
+          <ul id="sysChecklist" style="margin:0; padding-left:20px; color:var(--muted); font-size:13.5px; line-height:1.9;"></ul>
+        </div>
+
+        <div class="card">
+          <h2><span class="icon">📜</span>Mod Değişikliği Denetim Kaydı</h2>
+          <p class="card-desc">
+            Canlı/dry-run geçişlerinin salt-okunur, izole kaydı — kim, ne
+            zaman, hangi IP'den, hangi yöne değiştirdi.
+          </p>
+          <div class="table-scroll">
+            <table id="auditTable">
+              <thead>
+                <tr><th>Zaman</th><th>Kullanıcı</th><th>IP</th><th>Yön</th><th>dry_run</th><th>live_confirmed</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </main>
+  </div>
+
+  <div id="confirmModalOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:200; align-items:center; justify-content:center;">
+    <div class="card" style="max-width:440px; margin:0;">
+      <h2><span class="icon">🚨</span>Canlıya Geçişi Onayla</h2>
+      <p class="card-desc">
+        Bu işlem <strong>gerçek parayla</strong> işlem yapılmasına giden yolu
+        açar. Devam etmek için aşağıdaki metni <strong>birebir</strong> yaz:
+      </p>
+      <p style="font-family:monospace; font-size:13px; background:var(--bg-elevated); padding:10px 12px; border-radius:8px; border:1px solid var(--border);" id="confirmPhraseDisplay">–</p>
+      <input id="confirmPhraseInput" type="text" style="width:100%; margin-top:10px;" autocomplete="off" />
+      <div class="bt-apply-row" style="margin-top:14px;">
+        <button id="confirmPhraseSubmit" type="button">Onayla ve Canlıya Geç</button>
+        <button id="confirmPhraseCancel" type="button" class="secondary">Vazgeç</button>
+      </div>
+      <div id="confirmPhraseStatus" class="bt-status"></div>
+    </div>
   </div>
 
   <script src="/app.js"></script>

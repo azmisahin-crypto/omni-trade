@@ -60,5 +60,61 @@ class TestSignalsStorage(unittest.TestCase):
         self.assertEqual([s["price"] for s in limited], [107.0, 108.0, 109.0])
 
 
+class TestModeAuditLog(unittest.TestCase):
+    """Faz 16: canlı/dry-run geçiş denetim kaydı — sadece ekleme/okuma,
+    güncelleme ya da silme metodu yok (bkz. storage.py SCHEMA yorumu)."""
+
+    def setUp(self):
+        self.storage = Storage(":memory:")
+
+    def tearDown(self):
+        self.storage.close()
+
+    def test_log_and_read_back_a_mode_change(self):
+        self.storage.log_mode_change(
+            action="go_live", old_dry_run=True, new_dry_run=False,
+            old_live_trading_confirmed=False, new_live_trading_confirmed=True,
+            username="admin", ip="127.0.0.1",
+        )
+        entries = self.storage.get_mode_audit_log()
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry["action"], "go_live")
+        self.assertEqual(entry["username"], "admin")
+        self.assertEqual(entry["ip"], "127.0.0.1")
+        self.assertEqual(entry["old_dry_run"], 1)
+        self.assertEqual(entry["new_dry_run"], 0)
+        self.assertEqual(entry["old_live_trading_confirmed"], 0)
+        self.assertEqual(entry["new_live_trading_confirmed"], 1)
+
+    def test_most_recent_entry_first(self):
+        self.storage.log_mode_change(
+            action="go_live", old_dry_run=True, new_dry_run=False,
+            old_live_trading_confirmed=False, new_live_trading_confirmed=True,
+        )
+        self.storage.log_mode_change(
+            action="go_dry_run", old_dry_run=False, new_dry_run=True,
+            old_live_trading_confirmed=True, new_live_trading_confirmed=False,
+        )
+        entries = self.storage.get_mode_audit_log()
+        self.assertEqual(entries[0]["action"], "go_dry_run")
+        self.assertEqual(entries[1]["action"], "go_live")
+
+    def test_respects_limit(self):
+        for i in range(5):
+            self.storage.log_mode_change(
+                action="go_live", old_dry_run=True, new_dry_run=False,
+                old_live_trading_confirmed=False, new_live_trading_confirmed=True,
+            )
+        self.assertEqual(len(self.storage.get_mode_audit_log(limit=2)), 2)
+
+    def test_no_update_or_delete_method_exists(self):
+        # Bilinçli tasarım kararı: bu tablo API üzerinden salt-okunur olsun
+        # diye Storage sınıfında UPDATE/DELETE yapan hiçbir metod yok.
+        self.assertFalse(hasattr(self.storage, "update_mode_audit_log"))
+        self.assertFalse(hasattr(self.storage, "delete_mode_audit_log"))
+        self.assertFalse(hasattr(self.storage, "clear_mode_audit_log"))
+
+
 if __name__ == "__main__":
     unittest.main()

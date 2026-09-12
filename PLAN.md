@@ -23,7 +23,7 @@ Bu dosya, projenin doğuşundan itibaren her fazın **hangi motivasyonla**, **ha
 | **13** | Config Hot-Reload — restart olmadan canlı uygulama | ✅ Tamamlandı | Bu commit |
 | **14** | Dashboard Kimlik Doğrulama (HTTP Basic Auth) | ✅ Tamamlandı | Bu commit |
 | **15** | Tam Ekran "Kokpit" Yeniden Tasarımı (v2) | ✅ Tamamlandı | Bu commit |
-| **16** | Canlı/Dry-run modu + poll aralığı UI'dan | ⏳ Planlandı | - |
+| **16** | Canlı/Dry-run modu + poll aralığı UI'dan | ✅ Tamamlandı | Bu commit |
 | **17** | Push Tabanlı Güncellemeler (SSE/WebSocket) | ⏳ Planlandı | - |
 | **18** | Yeni Stratejiler + Karşılaştırmalı Şablonlar | ⏳ Planlandı | - |
 
@@ -115,3 +115,37 @@ parlaklık, sonra yeni özellik" sıralamasıyla uyumlu.
 Detaylı "neden" + "değişen dosyalar" kayıtları her zamanki gibi
 CHANGELOG.md'ye faz faz ekleniyor; buradaki matris ve checkpoint sadece
 güncel durumun özeti.
+
+## Faz 16 sonrası not — AUDIT_REPORT.md §6.1 ön koşulları nasıl karşılandı
+
+Faz 15'in ardından eklenen bağımsız denetim raporu, Faz 16'yı (canlı/
+dry-run + poll aralığı UI'dan) teslim etmeden ÖNCE üç ön koşul koymuştu:
+
+1. **`web_auth` kapalıyken 403**: `POST /api/system/live-mode`, diğer
+   düşük riskli uçların aksine ("auth kapalıysa herkese serbest" genel
+   kuralına TABİ DEĞİL) — `config.web_auth.enabled == False` iken her
+   zaman 403 döner, kimlik bilgisi gönderilse bile.
+2. **İkinci onay adımı**: `go_live` isteği gövdede `confirm_text`
+   alanında sabit bir metni ("CANLIYA GEÇİYORUM, RİSKİ ANLADIM") birebir
+   içermek zorunda; eksik/yanlışsa 400 döner ve HİÇBİR ŞEY değişmez
+   (config.yaml'a yazılmaz, audit log'a yazılmaz). `go_dry_run` bu adımı
+   gerektirmez — kill-switch mantığıyla tutarlı, riski azaltan işlem
+   sürtünmesiz olmalı.
+3. **İzole, salt-okunur denetim kaydı**: yeni `mode_audit_log` SQLite
+   tablosu (`storage.py`) — `Storage` sınıfında bu tabloyu güncelleyen ya
+   da silen HİÇBİR metod yok, sadece `log_mode_change` (ekle) ve
+   `get_mode_audit_log` (oku) var. Dashboard'daki "Sistem & Mod"
+   sekmesinde görünür (kim/ne zaman/hangi IP/eski→yeni değer).
+
+Ayrıca, `dry_run`/`live_trading_confirmed` hâlâ restart-only alanlar
+olduğundan (bkz. `engine.py` `_RESTART_ONLY_FIELDS` — bu Faz 16 ile
+DEĞİŞMEDİ, bilinçli olarak), uç nokta config.yaml'ı günceller ama yanıtı
+her zaman `restart_required: true` döner ve bunu açıkça belirtir —
+"tek tıkla anında canlıya geçiş" gibi yanıltıcı bir izlenim vermez.
+`poll_interval_seconds` ise zaten hot-reload edilebilir bir alan olduğu
+için (Faz 13) o uç (`/api/system/poll-interval`) sürtünmesiz, restart
+gerektirmez.
+
+137 → 156 test (19 yeni: `TestUpdateScalar`, `TestModeAuditLog`,
+`TestSystemEndpoint`, `TestLiveModeEndpoint`,
+`TestLiveModeEndpointWithAuthEnabled`).

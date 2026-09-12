@@ -45,6 +45,25 @@ CREATE TABLE IF NOT EXISTS signals (
     executed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_signals_symbol_ts ON signals (symbol, ts);
+
+-- Faz 16: dry_run/live_trading_confirmed her değiştiğinde (dashboard'daki
+-- "Canlıya Geç"/"Dry-Run'a Dön" uçlarından) buraya bir satır eklenir.
+-- Bilinçli olarak sadece INSERT yapan bir yardımcı (`log_mode_change`) ve
+-- sadece SELECT yapan bir yardımcı (`get_mode_audit_log`) var — UPDATE/DELETE
+-- için Storage'da hiçbir metod yok, yani bu tablo API üzerinden salt-okunur
+-- ve izole: denetim izini bir hatanın ya da kötüye kullanımın SİLEMEMESİ
+-- amaçlanıyor (bkz. AUDIT_REPORT.md §6.1).
+CREATE TABLE IF NOT EXISTS mode_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    username TEXT,
+    ip TEXT,
+    action TEXT NOT NULL,           -- go_live / go_dry_run
+    old_dry_run INTEGER NOT NULL,
+    new_dry_run INTEGER NOT NULL,
+    old_live_trading_confirmed INTEGER NOT NULL,
+    new_live_trading_confirmed INTEGER NOT NULL
+);
 """
 
 
@@ -139,6 +158,40 @@ class Storage:
         rows = [dict(zip(cols, row)) for row in cur.fetchall()]
         rows.reverse()
         return rows
+
+    def log_mode_change(
+        self, action: str, old_dry_run: bool, new_dry_run: bool,
+        old_live_trading_confirmed: bool, new_live_trading_confirmed: bool,
+        username: str = "", ip: str = "",
+    ) -> None:
+        """Faz 16: canlı/dry-run geçişini izole, salt-okunur denetim
+        kaydına yazar (bkz. SCHEMA'daki `mode_audit_log` yorumu). Bu metod
+        SADECE ekler — mevcut bir satırı değiştirmenin/silmenin bir yolu
+        yok, bilinçli olarak."""
+        self.conn.execute(
+            "INSERT INTO mode_audit_log "
+            "(ts, username, ip, action, old_dry_run, new_dry_run, "
+            " old_live_trading_confirmed, new_live_trading_confirmed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                time.time(), username, ip, action,
+                int(old_dry_run), int(new_dry_run),
+                int(old_live_trading_confirmed), int(new_live_trading_confirmed),
+            ),
+        )
+        self.conn.commit()
+
+    def get_mode_audit_log(self, limit: int = 100) -> list[dict]:
+        """En yeni değişiklik en üstte — dashboard'daki denetim paneli
+        için. Salt-okunur: burada UPDATE/DELETE yapan hiçbir metod yok."""
+        cur = self.conn.execute(
+            "SELECT ts, username, ip, action, old_dry_run, new_dry_run, "
+            "old_live_trading_confirmed, new_live_trading_confirmed "
+            "FROM mode_audit_log ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
     def beat(self) -> None:
         """Her başarılı döngü sonunda çağrılır — dışarıdan (healthcheck.py)

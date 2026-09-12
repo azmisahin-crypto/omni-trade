@@ -654,6 +654,189 @@ async function selectSymbol(symbol) {
   signalChartSymbol = symbol;
 }
 
+// --- Faz 16: canlı/dry-run modu + poll aralığı — bkz. AUDIT_REPORT.md §6.1
+// için üç ön koşul: (1) web_auth kapalıyken canlıya geçiş uç noktası 403
+// döner, dashboard bunu "Canlıya Geç" butonunu devre dışı bırakarak +
+// uyarı göstererek yansıtır; (2) canlıya geçiş tek istekle olmaz, sabit
+// bir onay metni gerektirir (modal burada); (3) her değişiklik salt-okunur
+// audit log'a yazılır (aşağıdaki tablo bunu gösterir).
+
+const LIVE_CHECKLIST_SUMMARY = [
+  "Strateji doğrulaması: birden fazla piyasa rejiminde backtest + en az birkaç hafta kesintisiz dry-run + pozitif getiri",
+  "Risk parametreleri (stop-loss/take-profit/max_daily_loss) gerçek risk toleransına göre gözden geçirildi",
+  "Borsa API anahtarı SADECE trade izinli — withdrawal kapalı, IP whitelist yapıldı",
+  "Telegram bildirimleri + healthcheck cron + günlük DB yedeği kurulu",
+  "Küçük bir gerçek bakiye ile başlanacak, ilk işlemler yakından izlenecek",
+];
+
+function renderChecklistSummary() {
+  const list = document.getElementById("sysChecklist");
+  if (!list || list.childElementCount) return;
+  for (const item of LIVE_CHECKLIST_SUMMARY) {
+    const li = document.createElement("li");
+    li.textContent = item;
+    list.appendChild(li);
+  }
+}
+
+function modePillHtml(dryRun) {
+  return dryRun
+    ? '<span class="mode-pill dry">🟢 DRY-RUN</span>'
+    : '<span class="mode-pill live">🔴 CANLI</span>';
+}
+
+async function refreshAuditLog() {
+  const rows = await fetchJSON("/api/system/audit-log?limit=20");
+  const tbody = document.querySelector("#auditTable tbody");
+  tbody.innerHTML = "";
+  if (!rows.length) {
+    tbody.appendChild(emptyStateRow(6, "📜", "Henüz mod değişikliği yok."));
+    return;
+  }
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    const dt = new Date(row.ts * 1000).toLocaleString();
+    const dir = row.action === "go_live" ? "→ CANLI" : "→ DRY-RUN";
+    tr.innerHTML = `
+      <td>${dt}</td>
+      <td>${row.username || "—"}</td>
+      <td>${row.ip || "—"}</td>
+      <td>${dir}</td>
+      <td>${row.old_dry_run} → ${row.new_dry_run}</td>
+      <td>${row.old_live_trading_confirmed} → ${row.new_live_trading_confirmed}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function refreshSystem() {
+  const data = await fetchJSON("/api/system");
+  document.getElementById("sysFileMode").innerHTML = modePillHtml(data.config_file.dry_run);
+  document.getElementById("sysRuntimeMode").innerHTML = modePillHtml(data.runtime.dry_run);
+  document.getElementById("sysPollValue").textContent = `${data.runtime.poll_interval_seconds}sn`;
+  document.getElementById("sysPollInput").value = data.runtime.poll_interval_seconds;
+  document.getElementById("sysRestartBanner").style.display = data.restart_required ? "block" : "none";
+  document.getElementById("sysAuthWarning").style.display = data.web_auth_enabled ? "none" : "block";
+  document.getElementById("sysGoLive").disabled = !data.web_auth_enabled;
+  await refreshAuditLog();
+}
+
+async function applyPollInterval() {
+  const input = document.getElementById("sysPollInput");
+  const button = document.getElementById("sysPollApply");
+  const seconds = parseInt(input.value, 10);
+  if (!Number.isFinite(seconds)) return;
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/system/poll-interval", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seconds }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Hata (HTTP ${res.status})`);
+    setStatus("sysPollStatus", data.message, "success");
+    showToast(data.message, "success");
+    await refreshSystem();
+  } catch (err) {
+    setStatus("sysPollStatus", err.message, "error");
+    showToast(err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("sysPollApply").addEventListener("click", applyPollInterval);
+
+// Canlıya geçiş modalını, ihtiyaç duyulan sabit onay metnini SUNUCUDAN
+// alarak açıyoruz (confirm_text'i BOŞ göndererek — bu 400 döner ama config'e
+// dokunmaz, audit log'a yazmaz; bkz. server.py). Böylece metin hem tek bir
+// yerde tanımlı kalır hem de yanlışlıkla ekrana eski/hatalı bir metin
+// yazılmaz.
+async function openLiveConfirmModal() {
+  try {
+    const res = await fetch("/api/system/live-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "go_live" }),
+    });
+    const data = await res.json();
+    if (res.status === 403) {
+      showToast(data.error, "error");
+      return;
+    }
+    const phrase = data.required_confirm_text || "CANLIYA GEÇİYORUM, RİSKİ ANLADIM";
+    document.getElementById("confirmPhraseDisplay").textContent = phrase;
+    document.getElementById("confirmPhraseInput").value = "";
+    setStatus("confirmPhraseStatus", "", undefined);
+    document.getElementById("confirmModalOverlay").style.display = "flex";
+    document.getElementById("confirmPhraseInput").focus();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function closeLiveConfirmModal() {
+  document.getElementById("confirmModalOverlay").style.display = "none";
+}
+
+async function submitLiveConfirm() {
+  const phrase = document.getElementById("confirmPhraseInput").value;
+  const button = document.getElementById("confirmPhraseSubmit");
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/system/live-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "go_live", confirm_text: phrase }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus("confirmPhraseStatus", data.error, "error");
+      return;
+    }
+    closeLiveConfirmModal();
+    setStatus("sysModeStatus", data.message, "success");
+    showToast("Canlı moda geçildi — config.yaml güncellendi, restart gerekiyor.", "success");
+    await refreshSystem();
+  } catch (err) {
+    setStatus("confirmPhraseStatus", err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function goDryRun() {
+  if (!confirm("Dry-run moduna dönülsün mü? config.yaml güncellenecek, bot restart sonrası uygulayacak.")) return;
+  const button = document.getElementById("sysGoDryRun");
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/system/live-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "go_dry_run" }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Hata (HTTP ${res.status})`);
+    setStatus("sysModeStatus", data.message, "success");
+    showToast("Dry-run moduna dönüldü.", "success");
+    await refreshSystem();
+  } catch (err) {
+    setStatus("sysModeStatus", err.message, "error");
+    showToast(err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("sysGoLive").addEventListener("click", openLiveConfirmModal);
+document.getElementById("sysGoDryRun").addEventListener("click", goDryRun);
+document.getElementById("confirmPhraseSubmit").addEventListener("click", submitLiveConfirm);
+document.getElementById("confirmPhraseCancel").addEventListener("click", closeLiveConfirmModal);
+document.getElementById("confirmPhraseInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitLiveConfirm();
+  if (e.key === "Escape") closeLiveConfirmModal();
+});
+
 // --- Faz 15: sekmeli "kokpit" düzeni — artık tek uzun sayfa scroll'lamak
 // yerine, üstteki sekmelerle panel değiştiriliyor. Sayfanın kendisi hiç
 // kaymıyor (bkz. index.html `#app { overflow: hidden }`), sadece aktif
@@ -693,5 +876,8 @@ async function refreshAll() {
 refreshAll();
 loadStrategies();
 refreshPairChips();
+renderChecklistSummary();
+refreshSystem();
 setupTabs();
 setInterval(refreshAll, 10000);
+setInterval(refreshSystem, 15000);

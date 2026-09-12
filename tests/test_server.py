@@ -413,6 +413,170 @@ class TestConfigPairStrategyEndpoint(ServerTestBase):
         self.assertEqual(status, 400)
 
 
+class TestSystemEndpoint(ServerTestBase):
+    """Faz 16: /api/system durum uç noktası + poll-interval değişikliği."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = Path(self._tmpdir.name) / "config.yaml"
+        self.config_path.write_text(
+            "dry_run: true\npoll_interval_seconds: 60\nlive_trading_confirmed: false\n"
+        )
+        super().setUp()
+        self.config.config_path = str(self.config_path)
+
+    def test_system_status_reflects_file_and_runtime(self):
+        body = self._get_json("/api/system")
+        self.assertTrue(body["runtime"]["dry_run"])
+        self.assertFalse(body["runtime"]["live_trading_confirmed"])
+        self.assertTrue(body["config_file"]["dry_run"])
+        self.assertFalse(body["restart_required"])
+        self.assertFalse(body["web_auth_enabled"])
+
+    def test_update_poll_interval_valid(self):
+        status, body = self._post_json("/api/system/poll-interval", {"seconds": 30})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["poll_interval_seconds"], 30)
+        self.assertFalse(body["restart_required"])
+        self.assertEqual(self.config.poll_interval_seconds, 30)
+        self.assertIn("poll_interval_seconds: 30", self.config_path.read_text())
+
+    def test_update_poll_interval_out_of_range_is_400(self):
+        status, body = self._post_json("/api/system/poll-interval", {"seconds": 1})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_update_poll_interval_non_integer_is_400(self):
+        status, body = self._post_json("/api/system/poll-interval", {"seconds": "abc"})
+        self.assertEqual(status, 400)
+
+    def test_audit_log_empty_by_default(self):
+        self.assertEqual(self._get_json("/api/system/audit-log"), [])
+
+
+class TestLiveModeEndpoint(ServerTestBase):
+    """Faz 16: canlı/dry-run geçiş — AUDIT_REPORT.md §6.1 ön koşulları."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = Path(self._tmpdir.name) / "config.yaml"
+        self.config_path.write_text(
+            "dry_run: true\nlive_trading_confirmed: false\n"
+        )
+        super().setUp()
+        self.config.config_path = str(self.config_path)
+        self.config.dry_run = True
+        self.config.live_trading_confirmed = False
+
+    def test_rejected_with_403_when_web_auth_disabled(self):
+        # §6.1 madde 1: web_auth kapalıyken bu uç TAMAMEN reddedilir —
+        # diğer düşük riskli uçların aksine ("auth kapalıysa serbest" kuralı
+        # burada geçerli DEĞİL.
+        status, body = self._post_json("/api/system/live-mode", {
+            "action": "go_live", "confirm_text": "her ne olursa olsun",
+        })
+        self.assertEqual(status, 403)
+        self.assertIn("error", body)
+        self.assertTrue(self.config.dry_run)  # değişiklik olmadı
+
+
+class TestLiveModeEndpointWithAuthEnabled(unittest.TestCase):
+    """web_auth açıkken go_live/go_dry_run akışı — auth + confirm_text
+    doğrulaması ayrı bir test sınıfında, çünkü Config web_auth alanı
+    setUp'tan ÖNCE (handler oluşturulmadan önce) ayarlanmalı."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = Path(self._tmpdir.name) / "config.yaml"
+        self.config_path.write_text("dry_run: true\nlive_trading_confirmed: false\n")
+
+        self.storage = Storage(":memory:")
+        self.config = Config(
+            web_auth=WebAuthConfig(enabled=True, username="admin", password="s3cret"),
+            config_path=str(self.config_path),
+        )
+        handler = make_handler(self.storage, self.config)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.port = self.server.server_address[1]
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.storage.close()
+
+    def _url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def _auth_header(self) -> dict:
+        token = base64.b64encode(b"admin:s3cret").decode()
+        return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
+
+    def _post_json(self, path: str, body: dict):
+        data = json.dumps(body).encode("utf-8")
+        req = Request(self._url(path), data=data, headers=self._auth_header(), method="POST")
+        try:
+            with urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_invalid_action_is_400(self):
+        status, body = self._post_json("/api/system/live-mode", {"action": "nope"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_go_live_without_confirm_text_is_400_and_no_change(self):
+        status, body = self._post_json("/api/system/live-mode", {"action": "go_live"})
+        self.assertEqual(status, 400)
+        self.assertIn("required_confirm_text", body)
+        self.assertTrue(self.config.dry_run)
+        self.assertEqual(self.storage.get_mode_audit_log(), [])
+
+    def test_go_live_with_wrong_confirm_text_is_400(self):
+        status, body = self._post_json("/api/system/live-mode", {
+            "action": "go_live", "confirm_text": "evet canliya gec",
+        })
+        self.assertEqual(status, 400)
+        self.assertTrue(self.config.dry_run)
+
+    def test_go_live_with_exact_confirm_text_succeeds_and_is_audited(self):
+        status, body = self._post_json("/api/system/live-mode", {
+            "action": "go_live",
+            "confirm_text": "CANLIYA GEÇİYORUM, RİSKİ ANLADIM",
+        })
+        self.assertEqual(status, 200)
+        self.assertFalse(body["dry_run"])
+        self.assertTrue(body["live_trading_confirmed"])
+        self.assertTrue(body["restart_required"])  # restart-only alan
+        self.assertFalse(self.config.dry_run)
+        self.assertTrue(self.config.live_trading_confirmed)
+        self.assertIn("dry_run: false", self.config_path.read_text())
+
+        log = self.storage.get_mode_audit_log()
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log[0]["action"], "go_live")
+        self.assertEqual(log[0]["username"], "admin")
+        self.assertEqual(log[0]["old_dry_run"], 1)
+        self.assertEqual(log[0]["new_dry_run"], 0)
+
+    def test_go_dry_run_requires_no_confirm_text(self):
+        # Önce canlıya geç, sonra tek istekle geri dön — ek onay gerekmez.
+        self._post_json("/api/system/live-mode", {
+            "action": "go_live", "confirm_text": "CANLIYA GEÇİYORUM, RİSKİ ANLADIM",
+        })
+        status, body = self._post_json("/api/system/live-mode", {"action": "go_dry_run"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["dry_run"])
+        self.assertFalse(body["live_trading_confirmed"])
+        self.assertEqual(len(self.storage.get_mode_audit_log()), 2)
+
+
 class TestWebAuth(unittest.TestCase):
     """Faz 14: `config.web_auth.enabled` açıkken dashboard HTTP Basic Auth
     ister. Varsayılan (kapalı) davranış diğer tüm testlerde zaten dolaylı
