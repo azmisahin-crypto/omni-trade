@@ -1,5 +1,14 @@
 async function fetchJSON(url) {
   const res = await fetch(url);
+  if (res.status === 401) {
+    // Faz 14: web_auth açık ama tarayıcı henüz kimlik bilgisi göndermedi
+    // (ya da yanlış). Sessizce yutmuyoruz — kullanıcıya tek seferlik bir
+    // ipucu gösteriyoruz; tarayıcının kendi Basic Auth popup'ı zaten
+    // devreye girer, biz sadece anlamsız bir JSON parse hatasını
+    // engelliyoruz.
+    setLiveStatus(false, true);
+    throw new Error("401 Unauthorized");
+  }
   return res.json();
 }
 
@@ -57,13 +66,16 @@ function setStatus(elId, message, type) {
 }
 
 let lastRefreshOk = null;
-function setLiveStatus(ok) {
+function setLiveStatus(ok, unauthorized = false) {
   const dot = document.getElementById("liveDot");
   const text = document.getElementById("liveStatusText");
   if (!dot || !text) return;
   if (ok) {
     dot.classList.remove("stale");
     text.textContent = `canlı · son güncelleme ${new Date().toLocaleTimeString()}`;
+  } else if (unauthorized) {
+    dot.classList.add("stale");
+    text.textContent = "kimlik doğrulama gerekli";
   } else {
     dot.classList.add("stale");
     text.textContent = "bağlantı sorunu — tekrar deneniyor…";
@@ -642,24 +654,30 @@ async function selectSymbol(symbol) {
   signalChartSymbol = symbol;
 }
 
-// --- Faz 12: nav scrollspy — üstteki bölüm bağlantılarını, kullanıcının
-// hangi kart hizasında olduğuna göre otomatik vurgular ---
-function setupSectionNav() {
-  const links = Array.from(document.querySelectorAll("#sectionNav a"));
-  const idToLink = new Map(links.map(a => [a.getAttribute("href").slice(1), a]));
-  const sections = links.map(a => document.getElementById(a.getAttribute("href").slice(1))).filter(Boolean);
-  if (!sections.length || !("IntersectionObserver" in window)) return;
+// --- Faz 15: sekmeli "kokpit" düzeni — artık tek uzun sayfa scroll'lamak
+// yerine, üstteki sekmelerle panel değiştiriliyor. Sayfanın kendisi hiç
+// kaymıyor (bkz. index.html `#app { overflow: hidden }`), sadece aktif
+// panelin içi (`.panel.active { overflow-y: auto }`) gerekirse kayıyor. ---
+function setupTabs() {
+  const buttons = Array.from(document.querySelectorAll(".tab-btn"));
+  const panels = Array.from(document.querySelectorAll(".panel"));
+  if (!buttons.length) return;
 
-  const observer = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (entry.isIntersecting) {
-        links.forEach(a => a.classList.remove("active"));
-        idToLink.get(entry.target.id)?.classList.add("active");
-      }
+  function activate(panelId) {
+    buttons.forEach(b => b.classList.toggle("active", b.dataset.panel === panelId));
+    panels.forEach(p => p.classList.toggle("active", p.id === panelId));
+    // Chart.js canvas'ları gizliyken (display:none) doğru boyutlanmıyor
+    // olabilir — panel görünür olduğunda ilgili grafikleri yeniden boyutlandır.
+    if (panelId === "panel-performance") {
+      equityChart?.resize();
+      drawdownChart?.resize();
     }
-  }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+    if (panelId === "panel-overview" && signalChart) {
+      signalChart.resize();
+    }
+  }
 
-  sections.forEach(s => observer.observe(s));
+  buttons.forEach(b => b.addEventListener("click", () => activate(b.dataset.panel)));
 }
 
 async function refreshAll() {
@@ -675,5 +693,5 @@ async function refreshAll() {
 refreshAll();
 loadStrategies();
 refreshPairChips();
-setupSectionNav();
+setupTabs();
 setInterval(refreshAll, 10000);
