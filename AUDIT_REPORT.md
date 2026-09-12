@@ -60,8 +60,9 @@ kasıtlı bir mimari seçim: web container'ına bot'u kontrol etme yetkisi
 | 12 | Görsel/UX cilası (v1) | ⚠️ | **Kullanıcı tarafından yetersiz bulundu** — bkz. §6 |
 | 13 | Config hot-reload | ✅ | Restart bağımlılığını kapattı |
 | 14 | Dashboard HTTP Basic Auth | ✅ | Tek-kullanıcılı, minimal |
-| 15 | Tam ekran sekmeli kokpit (v2) | ✅ | Faz 12'nin gerçek düzeltmesi |
-| 16–18 | Canlı/dry-run UI kontrolü, SSE/WebSocket, yeni stratejiler | ⏳ Planlı | Kod yazılmadı, sadece PLAN.md'de |
+| 15 | Tam ekran sekmeli kokpit (v2) | ✅ Doğrulandı | Kullanıcı canlı ortamda onayladı — bkz. §6 |
+| 16 | Canlı/dry-run UI kontrolü | ⏳ Planlı — **ön koşullu** | Bkz. §6.1, kodlama başlamadan önce zorunlu |
+| 17–18 | SSE/WebSocket, yeni stratejiler | ⏳ Planlı | Kod yazılmadı, sadece PLAN.md'de |
 
 ---
 
@@ -171,11 +172,62 @@ Faz 12 (ilk görsel/UX cilası), kullanıcı tarafından açıkça yetersiz
 bulunup reddedildi ("aşağı kayıyor", "sarı beğenmedim", "kullanışsız").
 Bunun kök nedeni **teknik değil süreçseldi**: cilalama, altta yatan
 düzen (layout) sorununu (tek uzun scroll) çözmeden yapıldı. Faz 15 bunu
-düzelttiği iddiasında ama **bu da kullanıcı tarafından henüz doğrulanmadı**
-— bu rapor yazılırken Faz 15 sadece statik/yapısal olarak kontrol edildi,
-kullanıcının "evet artık iyi" onayı gelmedi. Red-team/denetim sistemi
-bunu açık bir madde olarak görmeli: **Faz 15'in kullanıcı tarafından
-kabulü hâlâ beklemede.**
+düzelttiği iddiasında.
+
+**Durum güncellemesi (bu rapor ilk yazıldıktan sonra):** Faz 15,
+kullanıcı tarafından **canlı ortamda incelenip onaylandı** —
+sekmeli düzen, sinyal kartı detay açılımı, Telegram↔dashboard log
+senkronizasyonu ve equity/drawdown/walk-forward görselleştirmeleri
+"beklentilerle tam uyumlu" olarak doğrulandı. Önceki madde
+("Faz 15'in kullanıcı tarafından kabulü hâlâ beklemede") artık
+**✅ Başarıyla Doğrulandı** olarak kapatılmıştır. Bu, raporun ilk
+halinde §5'te vurgulanan "bağımsız doğrulama eksikliği" boşluklarından
+BİRİNİN (front-end'in gerçek kullanıcı tarafından görsel doğrulanması)
+kapandığı anlamına gelir — kalan boşluklar (gerçek borsaya karşı hiç
+çalıştırılmama, headless tarayıcı/otomatik UI testi eksikliği) hâlâ
+geçerlidir, bkz. §3.
+
+Ayrıca §4'te listelenen güvenlik/mimari riskler (özellikle SQLite
+şifrelemesi ve mevcut auth yapısı), kullanıcı tarafından şu anki
+operasyonel aşama için **"kabul edilebilir teknik borç"** olarak
+işaretlenmiştir. **Bu kabul KOŞULLUDUR** — bkz. §6.1, çünkü Faz 16
+bu risklerin bir kısmını (özellikle auth zayıflığını) kritik bir
+aksiyonla (canlı işleme geçiş) birleştirerek önemli ölçüde büyütüyor.
+
+### 6.1) 🔴 Faz 16 ön koşulu — ZORUNLU, tartışmaya açık değil
+
+Faz 13'te `live_trading_confirmed` alanının **kasıtlı olarak
+restart-only** bırakılması bir tasarım hatası değil, kaza veya
+kötü niyetli tek-tıkla-canlıya-geçişe karşı bilinçli bir sürtünme
+katmanıydı (bkz. §1, §4 madde 5). Faz 16'nın hedefi
+("dashboard'dan dry-run/canlı statüsü kontrolü") bu sürtünmeyi
+tanım gereği ortadan kaldırıyor. Bunu §4'te listelenen mevcut auth
+zayıflıklarıyla (varsayılan kapalı, brute-force koruması yok, tek
+paylaşılan kimlik bilgisi, audit log yok) birlikte düşünürsek: sistemin
+**en yıkıcı tek aksiyonu** en zayıf korumalı yüzeyden erişilebilir hale
+gelir. Bu yüzden aşağıdaki üç şart, Faz 16 kodlaması BAŞLAMADAN ÖNCE
+tasarıma dahil edilmiş olmalıdır — öneri değil, **gereksinimdir**:
+
+1. **Zorunlu auth:** `dry_run`/`live_trading_confirmed` durumunu
+   değiştiren endpoint, `web_auth.enabled=false` iken **tamamen
+   reddedilmelidir** (API seviyesinde, sessizce izin vermek yerine
+   açık `403`). Bu, diğer düşük riskli endpoint'lerden (coin ekle/çıkar,
+   strateji override — bunlar auth kapalıyken de çalışmaya devam
+   edebilir) FARKLI ve daha katı bir kural olmalı.
+2. **İkinci teyit adımı:** Tek istekle canlıya geçiş YASAK. Kullanıcı
+   şifresini tekrar girmeli veya sabit bir onay metnini (örn.
+   `"CANLI'YA GEÇ"`) yazarak göndermelidir; sunucu bu teyidi
+   doğrulamadan state'i değiştirmemelidir.
+3. **İzole audit log:** Bu state değişikliği, standart
+   trade/signal loglarından AYRI bir tabloya/dosyaya — kim (username),
+   ne zaman (UTC timestamp), hangi IP, eski→yeni değer — yazılmalıdır.
+   Bu log dashboard'da salt-okunur gösterilmeli, API'den silinemez
+   olmalıdır.
+
+Faz 16'yı uygulayan geliştirici/model, bu üç maddeyi karşılamayan bir
+tasarımı **teslim etmemelidir**; PLAN.md/CHANGELOG.md'ye Faz 16 girişi
+eklenirken bu üç maddenin karşılandığının açıkça belirtilmesi
+(hangi test dosyasında doğrulandığı dahil) zorunludur.
 
 ---
 
