@@ -585,13 +585,65 @@ sırf bu rahatlık için — orantısız bir risk artışı olurdu. Panel bu
 kısıtı `restart_required` mesajıyla açıkça gösteriyor, sessizce
 gizlemiyor.
 
+## Faz 11 — dashboard'dan tek tıkla dry-run config uygulama ✅ Tamamlandı
+
+**Neden:** Faz 10 coin ekle/çıkarı UI'a taşıdı, ama Faz 6'daki bilinçli
+sınır hâlâ duruyordu: "Strateji Test Et" panelinde iyi sonuç veren bir
+strateji/parametre kombinasyonu bulunca, bunu canlıya (dry-run'a) almak
+için hâlâ SSH'lanıp `config.yaml`'daki `pair_strategies`'i elle yazmak
+gerekiyordu. Faz 6'nın notu bunu zaten öngörmüştü: "ileride istenirse
+ayrı bir onay adımıyla eklenebilir" — bu, o "ayrı onay adımı".
+
+**Değişen:**
+- **`omnitrade/config.py`**:
+  - `update_pair_strategies(config_path, pair_strategies)` —
+    `update_pairs()` ile aynı prensip (regex ile sadece `pair_strategies:`
+    bloğunu hedefle, dosyanın geri kalanındaki yorumları koru). Boş dict
+    için tek satır `pair_strategies: {}` (config.yaml'daki mevcut
+    kullanımla tutarlı), doluysa `yaml.safe_dump` ile 2 boşluk girintili
+    nested blok.
+- **`omnitrade/web/server.py`**:
+  - `GET /api/config/pairs` yanıtına `dry_run` ve `pair_strategies` eklendi
+    — dashboard'un "uygula" butonunu ne zaman göstereceğini ve hangi
+    coin'lerde zaten override olduğunu bilmesi için.
+  - Yeni `POST /api/config/pair-strategy`: `{"symbol", "action":
+    "apply"|"reset", "strategy"?, "params"?}`. `apply`: `strategy`+`params`
+    `get_strategy()` ile doğrulanır (bilinmeyen strateji/geçersiz parametre
+    → 400), symbol `config.pairs` içinde olmalı (değilse 400 — önce Coin
+    Yönetimi'nden eklenmeli), sonuç `pair_strategies`'e yazılır. `reset`:
+    override yoksa 400, varsa siler. **Güvenlik freni: SADECE
+    `config.dry_run: true` iken izin verilir — canlı modda (`dry_run:
+    false`) 403 döner ve elle config.yaml düzenlemeye yönlendirir.** Bu,
+    Faz 6'nın "canlı stratejiyi aceleyle değiştirmeye karşı sürtünme"
+    endişesini tamamen kaldırmıyor, sadece gerçek para hareket etmeyen
+    moda özgü kılıyor.
+- **`omnitrade/web/static/index.html` + `app.js`**: "Strateji Test Et"
+  panelinin altına, sadece açıkça bir strateji seçilip (dropdown "— canlı
+  ayar —" değil) backtest çalıştırıldıktan SONRA ve `dry_run: true`
+  iken görünen bir satır — "Bu stratejiyi bu coin için uygula" butonu
+  + (override zaten varsa) "Override'ı kaldır" butonu. İşlem sonrası
+  durum mesajı gösterilir, `dashboardPairStrategies` state'i güncellenir.
+- Testler: `tests/test_config.py::TestUpdatePairStrategies` (3 test),
+  `tests/test_server.py::TestConfigPairStrategyEndpoint` (10 test —
+  apply/reset başarı, parametre yokken varsayılanları kullanma, canlı
+  modda 403, bilinmeyen strateji/geçersiz parametre/untracked-coin/eksik
+  alan/geçersiz aksiyon → 400, dosyanın ve in-memory config'in gerçekten
+  güncellendiğinin doğrulanması). **Toplam: 116 → 129 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Canlı modda (`dry_run: false`) herhangi bir
+şekilde bu uçtan strateji değiştirme izni. Bu, "canlı parayla çalışan
+stratejiyi bir buton tıklamasıyla değiştirebilme" riskini tamamen
+dashboard'un dışında tutuyor — canlıda hâlâ elle `config.yaml` + bilinçli
+bir restart gerekiyor, tıpkı `live_trading_confirmed` bayrağındaki gibi
+kasıtlı bir sürtünme.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı
    temsil ediyor, mesajları neyin neden yapıldığını anlatıyor.
 2. `PYTHONPATH=. python -m unittest discover -s tests -v` ile testlerin
    hâlâ geçtiğini doğrulayarak başla.
-3. Faz 0-10 (+ düzeltme fazları 1.5/2.5/3.6) tamamlandı — güncel durum ve
+3. Faz 0-11 (+ düzeltme fazları 1.5/2.5/3.6) tamamlandı — güncel durum ve
    sıradaki fazlar için `PLAN.md`'deki özet matrise bak. Yeni bir iş varsa
    (kullanıcı isteği, bulunan bug, yeni faz), önce burada "neden" yazan
    bir bölüm taslağı aç, sonra uygula — kod değil dokümantasyon önce

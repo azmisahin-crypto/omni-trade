@@ -69,6 +69,16 @@
   .bt-pos { color: #4ade80; }
   .bt-neg { color: #f87171; }
 
+  .bt-apply-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .bt-apply-row button {
+    background: #16a34a; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .bt-apply-row button:hover { background: #15803d; }
+  .bt-apply-row button:disabled { background: #2a2e37; color: #6b7280; cursor: wait; }
+  .bt-apply-row button.secondary { background: #2a2e37; color: #e6e6e6; }
+  .bt-apply-row button.secondary:hover { background: #3a3f4b; }
+
   .pair-chips { display: flex; gap: 8px; flex-wrap: wrap; }
   .pair-chip {
     display: inline-flex; align-items: center; gap: 8px; background: #12141a;
@@ -143,7 +153,9 @@
       Geçmiş veriyle stratejiyi anında test et — terminal/kod gerekmez.
       Varsayılan olarak o coin için şu an canlıda çalışan strateji ve
       parametreler kullanılır; aşağıdan değiştirip denemeler yapabilirsin,
-      bu canlı config'i etkilemez.
+      bu canlı config'i etkilemez. Sonuç iyiyse ve bir strateji seçtiysen
+      (dry-run modundayken), aşağıdaki "uygula" butonuyla bunu o coin için
+      kalıcı hale getirebilirsin.
     </p>
     <div class="backtest-form">
       <label>Coin
@@ -163,6 +175,11 @@
     </div>
     <div id="btStatus" class="bt-status"></div>
     <div id="btResults"></div>
+    <div id="btApplyRow" class="bt-apply-row" style="display:none;">
+      <button id="btApply" type="button">Bu stratejiyi bu coin için uygula (dry-run)</button>
+      <button id="btReset" type="button" class="secondary">Override'ı kaldır</button>
+      <span id="btApplyStatus" class="bt-status"></span>
+    </div>
   </div>
 
   <div class="card">

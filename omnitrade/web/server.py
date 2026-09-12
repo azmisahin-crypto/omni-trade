@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from omnitrade.backtest import run_backtest, run_walk_forward
-from omnitrade.config import Config, normalize_pair, update_pairs
+from omnitrade.config import Config, normalize_pair, update_pair_strategies, update_pairs
 from omnitrade.exchange import ExchangeClient
 from omnitrade.stats import compute_drawdown_curve, compute_summary_stats
 from omnitrade.storage import Storage
@@ -71,8 +71,15 @@ def make_handler(storage: Storage, config: Config):
             elif path == "/api/config/pairs":
                 # Faz 10: dashboard'daki "Coin Yönetimi" paneli şu an
                 # config'te (in-memory, bu web sürecinde) tanımlı pariteleri
-                # buradan okur.
-                self._json({"pairs": list(config.pairs)})
+                # buradan okur. Faz 11: aynı yanıta `dry_run` ve
+                # `pair_strategies` de eklendi — "backtest sonucunu uygula"
+                # butonunun sadece dry-run modunda gösterilmesi ve hangi
+                # coin'lerin zaten override'ı olduğunun bilinmesi için.
+                self._json({
+                    "pairs": list(config.pairs),
+                    "dry_run": config.dry_run,
+                    "pair_strategies": config.pair_strategies,
+                })
             elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
             elif path == "/app.js":
@@ -88,6 +95,8 @@ def make_handler(storage: Storage, config: Config):
                 self._handle_backtest_batch()
             elif parsed.path == "/api/config/pairs":
                 self._handle_config_pairs()
+            elif parsed.path == "/api/config/pair-strategy":
+                self._handle_config_pair_strategy()
             else:
                 self.send_error(404)
 
@@ -355,6 +364,103 @@ def make_handler(storage: Storage, config: Config):
 
             self._json({
                 "pairs": new_pairs,
+                "restart_required": True,
+                "message": (
+                    "config.yaml güncellendi. Çalışan bota bunu fark "
+                    "ettirmek için `docker compose restart bot` (ya da "
+                    "`deploy.sh`) çalıştırman gerekiyor."
+                ),
+            })
+
+        def _handle_config_pair_strategy(self):
+            """Faz 11: "tek tıkla dry-run config uygulama" — Strateji Test Et
+            panelinde iyi sonuç veren bir strateji/parametre kombinasyonunu
+            bir coin için kalıcı `pair_strategies` override'ı olarak
+            kaydet. Gövde: `{"symbol", "action": "apply"|"reset",
+            "strategy"?, "params"?}` ("apply" için strategy zorunlu, params
+            opsiyonel — boşsa stratejinin kendi varsayılanları kullanılır).
+
+            Bilinçli güvenlik freni: SADECE `config.dry_run: true` iken
+            izin verilir. Faz 6'da bilerek ertelenmişti ("backtest sonucunu
+            görüp config.yaml'ı elle güncellemek, canlı stratejiyi
+            aceleyle değiştirmeye karşı bir sürtünme katmanı olsun") — bu
+            hâlâ geçerli bir endişe, sadece dry-run'a (gerçek para
+            hareket etmeyen mod) özgü kılındı. Canlı modda (`dry_run:
+            false`) bu uçtan strateji değişikliği YAPILAMAZ; kullanıcı
+            hâlâ config.yaml'ı elle düzenlemek zorunda — bilerek.
+            """
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            action = req.get("action")
+            raw_symbol = req.get("symbol")
+            if action not in ("apply", "reset"):
+                self._json({"error": "'action' 'apply' ya da 'reset' olmalı."}, status=400)
+                return
+            if not raw_symbol:
+                self._json({"error": "'symbol' zorunlu."}, status=400)
+                return
+
+            try:
+                symbol = normalize_pair(raw_symbol)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, status=400)
+                return
+
+            if not config.dry_run:
+                self._json({
+                    "error": (
+                        "Canlı modda (dry_run: false) strateji override'ı "
+                        "dashboard'dan uygulanamaz — bu bilinçli bir güvenlik "
+                        "freni. config/config.yaml'daki pair_strategies'i "
+                        "elle düzenlemen ve botu yeniden başlatman gerekiyor."
+                    ),
+                }, status=403)
+                return
+
+            if symbol not in config.pairs:
+                self._json({
+                    "error": f"{symbol} 'pairs' listesinde değil — önce Coin Yönetimi panelinden ekle.",
+                }, status=400)
+                return
+
+            pair_strategies = dict(config.pair_strategies)
+
+            if action == "reset":
+                if symbol not in pair_strategies:
+                    self._json({"error": f"{symbol} için zaten bir override yok."}, status=400)
+                    return
+                del pair_strategies[symbol]
+            else:
+                strategy_name = req.get("strategy")
+                if not strategy_name:
+                    self._json({"error": "'strategy' zorunlu (action='apply')."}, status=400)
+                    return
+                params = req.get("params") or {}
+                try:
+                    get_strategy(strategy_name, params)
+                except (ValueError, TypeError) as exc:
+                    self._json({"error": f"Geçersiz strateji/parametre: {exc}"}, status=400)
+                    return
+                pair_strategies[symbol] = {"strategy": strategy_name, "params": params}
+
+            try:
+                update_pair_strategies(config.config_path, pair_strategies)
+            except OSError as exc:
+                self._json({"error": f"config.yaml yazılamadı: {exc}"}, status=500)
+                return
+
+            # In-memory config'i de güncelle — bkz. `_handle_config_pairs`'teki
+            # aynı gerekçe (bu WEB sürecinin kendi görünümü tutarlı kalsın).
+            config.pair_strategies = pair_strategies
+
+            self._json({
+                "pair_strategies": pair_strategies,
                 "restart_required": True,
                 "message": (
                     "config.yaml güncellendi. Çalışan bota bunu fark "

@@ -178,3 +178,47 @@ def update_pairs(config_path: str, pairs: list) -> None:
         text += ("\n" if text else "") + new_block
 
     path.write_text(text)
+
+
+def _yaml_key_block(key: str, value: dict) -> str:
+    """`key:` başlığı altına, 2 boşluk girintiyle, `value` dict'ini YAML
+    olarak render eder. Boş dict için tek satırlık `key: {}` döner —
+    config.yaml'daki mevcut kullanımla (bkz. `pair_strategies: {}`)
+    tutarlı olsun diye.
+    """
+    if not value:
+        return f"{key}: {{}}\n"
+    dumped = yaml.safe_dump(value, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    indented = "\n".join(("  " + line if line else line) for line in dumped.splitlines())
+    return f"{key}:\n{indented}\n"
+
+
+def update_pair_strategies(config_path: str, pair_strategies: dict) -> None:
+    """`config.yaml`'daki `pair_strategies:` bloğunu YERİNDE günceller.
+
+    Faz 11: "tek tıkla dry-run config uygulama" — backtest panelinde iyi
+    sonuç veren bir strateji/parametre kombinasyonunu bir coin için
+    `pair_strategies` override'ı olarak kaydetmek artık dashboard'dan
+    yapılabiliyor. `update_pairs()` ile aynı gerekçeyle (yorumları koru)
+    metin tabanlı, sadece `pair_strategies:` bloğunu hedefleyen bir
+    değişiklik yapılıyor — tüm dosyayı `yaml.safe_dump` ile yeniden
+    yazmak, bu anahtarın ÜSTÜNDEKİ örnek/açıklama yorumlarını silerdi
+    (o yorumlar bu bloğun DIŞINDA kaldığı için etkilenmiyor).
+
+    Aynı restart kısıtı burada da geçerli: dosya güncellenir, ama çalışan
+    bot süreci config'i yeniden okumadığı için (bkz. `update_pairs`)
+    değişikliğin etkili olması için yeniden başlatma gerekir.
+    """
+    path = Path(config_path)
+    text = path.read_text() if path.exists() else ""
+    new_block = _yaml_key_block("pair_strategies", pair_strategies)
+
+    pattern = re.compile(r"^pair_strategies:.*\n(?:[ \t]+.*\n?)*", re.MULTILINE)
+    if pattern.search(text):
+        text = pattern.sub(new_block, text, count=1)
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += ("\n" if text else "") + new_block
+
+    path.write_text(text)

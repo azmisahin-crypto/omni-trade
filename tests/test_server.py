@@ -265,6 +265,8 @@ class TestConfigPairsEndpoint(ServerTestBase):
     def test_get_returns_current_pairs(self):
         body = self._get_json("/api/config/pairs")
         self.assertEqual(body["pairs"], ["BTC/USDT", "ETH/USDT"])
+        self.assertTrue(body["dry_run"])
+        self.assertEqual(body["pair_strategies"], {})
 
     def test_add_valid_pair_updates_memory_and_file(self):
         status, body = self._post_json("/api/config/pairs", {"symbol": "sol/usdt", "action": "add"})
@@ -311,6 +313,100 @@ class TestConfigPairsEndpoint(ServerTestBase):
 
     def test_missing_symbol_is_400(self):
         status, body = self._post_json("/api/config/pairs", {"action": "add"})
+        self.assertEqual(status, 400)
+
+
+class TestConfigPairStrategyEndpoint(ServerTestBase):
+    """Faz 11: dashboard'dan tek tıkla dry-run pair_strategies override'ı
+    uygula/kaldır. `Config.config_path` yine geçici bir dosyaya işaret
+    ediyor — bkz. TestConfigPairsEndpoint'teki aynı gerekçe."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.config_path = Path(self._tmpdir.name) / "config.yaml"
+        self.config_path.write_text(
+            "dry_run: true\npairs:\n  - BTC/USDT\n  - ETH/USDT\npair_strategies: {}\n"
+        )
+        super().setUp()
+        self.config.dry_run = True
+        self.config.pairs = ["BTC/USDT", "ETH/USDT"]
+        self.config.pair_strategies = {}
+        self.config.config_path = str(self.config_path)
+
+    def test_apply_valid_strategy_updates_memory_and_file(self):
+        status, body = self._post_json("/api/config/pair-strategy", {
+            "symbol": "eth/usdt", "action": "apply",
+            "strategy": "RsiStrategy", "params": {"period": 21},
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["pair_strategies"], {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}})
+        self.assertTrue(body["restart_required"])
+        self.assertEqual(self.config.pair_strategies, {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}})
+        text = self.config_path.read_text()
+        self.assertIn("ETH/USDT", text)
+        self.assertIn("RsiStrategy", text)
+        self.assertIn("dry_run: true", text)
+
+    def test_apply_without_params_uses_strategy_defaults(self):
+        status, body = self._post_json("/api/config/pair-strategy", {
+            "symbol": "BTC/USDT", "action": "apply", "strategy": "MacdStrategy",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["pair_strategies"]["BTC/USDT"], {"strategy": "MacdStrategy", "params": {}})
+
+    def test_reset_removes_existing_override(self):
+        self._post_json("/api/config/pair-strategy", {
+            "symbol": "BTC/USDT", "action": "apply", "strategy": "MacdStrategy",
+        })
+        status, body = self._post_json("/api/config/pair-strategy", {"symbol": "BTC/USDT", "action": "reset"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["pair_strategies"], {})
+        self.assertEqual(self.config.pair_strategies, {})
+        self.assertNotIn("MacdStrategy", self.config_path.read_text())
+
+    def test_reset_without_existing_override_is_400(self):
+        status, body = self._post_json("/api/config/pair-strategy", {"symbol": "BTC/USDT", "action": "reset"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_apply_rejected_when_live_trading(self):
+        self.config.dry_run = False
+        status, body = self._post_json("/api/config/pair-strategy", {
+            "symbol": "BTC/USDT", "action": "apply", "strategy": "RsiStrategy",
+        })
+        self.assertEqual(status, 403)
+        self.assertIn("error", body)
+        self.assertEqual(self.config.pair_strategies, {})
+
+    def test_apply_unknown_strategy_is_400(self):
+        status, body = self._post_json("/api/config/pair-strategy", {
+            "symbol": "BTC/USDT", "action": "apply", "strategy": "NoSuchStrategy",
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_apply_invalid_params_is_400(self):
+        status, body = self._post_json("/api/config/pair-strategy", {
+            "symbol": "BTC/USDT", "action": "apply", "strategy": "RsiStrategy",
+            "params": {"not_a_real_param": 1},
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_apply_for_untracked_symbol_is_400(self):
+        status, body = self._post_json("/api/config/pair-strategy", {
+            "symbol": "SOL/USDT", "action": "apply", "strategy": "RsiStrategy",
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_apply_missing_strategy_is_400(self):
+        status, body = self._post_json("/api/config/pair-strategy", {"symbol": "BTC/USDT", "action": "apply"})
+        self.assertEqual(status, 400)
+
+    def test_invalid_action_is_400(self):
+        status, body = self._post_json("/api/config/pair-strategy", {"symbol": "BTC/USDT", "action": "delete"})
         self.assertEqual(status, 400)
 
 

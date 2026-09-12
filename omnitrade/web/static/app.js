@@ -110,9 +110,16 @@ async function refreshSignals() {
 }
 
 // --- Faz 10: dashboard'dan coin ekle/çıkar ---
+// --- Faz 11: tek tıkla dry-run config uygulama için de burada tutulan
+// dry_run/pair_strategies durumu kullanılıyor (bkz. updateApplyRowVisibility) ---
+
+let dashboardDryRun = true;
+let dashboardPairStrategies = {};
 
 async function refreshPairChips() {
   const data = await fetchJSON("/api/config/pairs");
+  dashboardDryRun = data.dry_run;
+  dashboardPairStrategies = data.pair_strategies || {};
   const container = document.getElementById("pairChips");
   container.innerHTML = "";
   for (const symbol of data.pairs) {
@@ -122,6 +129,7 @@ async function refreshPairChips() {
     chip.querySelector("button").addEventListener("click", () => removePair(symbol, chip));
     container.appendChild(chip);
   }
+  updateApplyRowVisibility();
 }
 
 function setPairStatus(message, isError) {
@@ -286,16 +294,19 @@ async function runBacktest() {
     walk_forward: parseInt(document.getElementById("btSplits").value, 10) || 4,
   };
   const strategyName = document.getElementById("btStrategy").value;
+  const explicitParams = collectStrategyParams();
   if (strategyName) {
     body.strategy = strategyName;
-    const params = collectStrategyParams();
-    if (Object.keys(params).length) body.params = params;
+    if (Object.keys(explicitParams).length) body.params = explicitParams;
   }
 
   button.disabled = true;
   status.classList.remove("error");
   status.textContent = `${symbol} için geçmiş veri çekiliyor ve test ediliyor... (birkaç saniye sürebilir)`;
   results.innerHTML = "";
+  lastBacktestApply = null;
+  document.getElementById("btApplyStatus").textContent = "";
+  updateApplyRowVisibility();
 
   try {
     const res = await fetch("/api/backtest", {
@@ -334,6 +345,17 @@ async function runBacktest() {
     }
     html += "</tbody></table>";
     results.innerHTML = html;
+
+    // Faz 11: sadece açıkça bir strateji seçildiyse (dropdown "— canlı
+    // ayar —" değilse) "uygula" anlamlı — canlı ayarı kendine uygulamak
+    // no-op olurdu. Buton görünürlüğü ayrıca dry_run olmasına da bağlı,
+    // bkz. updateApplyRowVisibility().
+    if (strategyName) {
+      lastBacktestApply = { symbol: data.symbol, strategy: strategyName, params: explicitParams };
+    } else {
+      lastBacktestApply = null;
+    }
+    updateApplyRowVisibility();
   } catch (err) {
     status.textContent = `İstek başarısız: ${err}`;
     status.classList.add("error");
@@ -343,6 +365,77 @@ async function runBacktest() {
 }
 
 document.getElementById("btRun").addEventListener("click", runBacktest);
+
+// --- Faz 11: backtest sonucunu tek tıkla dry-run pair_strategies'e uygula ---
+
+let lastBacktestApply = null; // { symbol, strategy, params } — en son çalıştırılan backtest
+
+function updateApplyRowVisibility() {
+  const row = document.getElementById("btApplyRow");
+  const resetBtn = document.getElementById("btReset");
+  if (!lastBacktestApply || !dashboardDryRun) {
+    row.style.display = "none";
+    return;
+  }
+  row.style.display = "flex";
+  const hasOverride = Object.prototype.hasOwnProperty.call(dashboardPairStrategies, lastBacktestApply.symbol);
+  resetBtn.style.display = hasOverride ? "inline-block" : "none";
+}
+
+async function postPairStrategyAction(payload) {
+  const res = await fetch("/api/config/pair-strategy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Hata (HTTP ${res.status})`);
+  return data;
+}
+
+async function applyBacktestStrategy() {
+  if (!lastBacktestApply) return;
+  const button = document.getElementById("btApply");
+  const status = document.getElementById("btApplyStatus");
+  button.disabled = true;
+  try {
+    const data = await postPairStrategyAction({
+      symbol: lastBacktestApply.symbol, action: "apply",
+      strategy: lastBacktestApply.strategy, params: lastBacktestApply.params,
+    });
+    status.textContent = data.message;
+    status.classList.remove("error");
+    dashboardPairStrategies = data.pair_strategies;
+    updateApplyRowVisibility();
+  } catch (err) {
+    status.textContent = err.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function resetBacktestStrategy() {
+  if (!lastBacktestApply) return;
+  const button = document.getElementById("btReset");
+  const status = document.getElementById("btApplyStatus");
+  button.disabled = true;
+  try {
+    const data = await postPairStrategyAction({ symbol: lastBacktestApply.symbol, action: "reset" });
+    status.textContent = data.message;
+    status.classList.remove("error");
+    dashboardPairStrategies = data.pair_strategies;
+    updateApplyRowVisibility();
+  } catch (err) {
+    status.textContent = err.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("btApply").addEventListener("click", applyBacktestStrategy);
+document.getElementById("btReset").addEventListener("click", resetBacktestStrategy);
 
 // --- Faz 9: leaderboard — çoklu strateji × coin karşılaştırma ---
 

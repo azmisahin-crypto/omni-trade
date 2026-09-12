@@ -18,5 +18,5 @@ Bu dosya, projenin doğuşundan itibaren her fazın **hangi motivasyonla**, **ha
 | **8** | Otomatik Strateji UI Formu (Introspection) | ✅ Tamamlandı | Bu commit |
 | **9** | Çoklu Strateji × Coin Karşılaştırma (Leaderboard) | ✅ Tamamlandı | Bu commit |
 | **10** | Coin Listesini UI'dan Ekle/Çıkar | ✅ Tamamlandı | Bu commit |
-| **11** | Tek Tıkla Dry-Run Config Uygulama | ⏳ Sırada | - |
-| **12** | Görsel / UX Cilası | ⏳ Planlanıyor | - |
+| **11** | Tek Tıkla Dry-Run Config Uygulama | ✅ Tamamlandı | Bu commit |
+| **12** | Görsel / UX Cilası | ⏳ Sırada | - |

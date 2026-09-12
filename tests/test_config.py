@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from omnitrade.config import load_config, normalize_pair, update_pairs
+from omnitrade.config import load_config, normalize_pair, update_pair_strategies, update_pairs
 
 
 class TestLoadConfig(unittest.TestCase):
@@ -181,6 +181,60 @@ class TestUpdatePairs(unittest.TestCase):
         update_pairs(str(config_path), ["BTC/USDT"])
         cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
         self.assertEqual(cfg.pairs, ["BTC/USDT"])
+        self.assertIn("dry_run: true", config_path.read_text())
+
+
+class TestUpdatePairStrategies(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmp = Path(self._tmpdir.name)
+
+    def test_replaces_empty_dict_block_and_preserves_comments_above(self):
+        config_path = self.tmp / "config.yaml"
+        config_path.write_text(
+            "# Örnek (varsayılan olarak devre dışı, kopyala/aç):\n"
+            "# pair_strategies:\n"
+            "#   ETH/USDT:\n"
+            "#     strategy: RsiStrategy\n"
+            "pair_strategies: {}\n"
+            "\n"
+            "fee_pct: 0.001\n"
+        )
+        update_pair_strategies(str(config_path), {
+            "ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}},
+        })
+        text = config_path.read_text()
+        self.assertIn("# Örnek (varsayılan olarak devre dışı, kopyala/aç):", text)
+        self.assertIn("fee_pct: 0.001", text)
+        self.assertIn("pair_strategies:\n  ETH/USDT:\n    strategy: RsiStrategy\n    params:\n      period: 21\n", text)
+
+        cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.pair_strategies, {"ETH/USDT": {"strategy": "RsiStrategy", "params": {"period": 21}}})
+
+    def test_replaces_nested_block_back_to_empty_dict(self):
+        config_path = self.tmp / "config.yaml"
+        config_path.write_text(
+            "pair_strategies:\n"
+            "  ETH/USDT:\n"
+            "    strategy: RsiStrategy\n"
+            "    params:\n"
+            "      period: 21\n"
+            "\n"
+            "fee_pct: 0.001\n"
+        )
+        update_pair_strategies(str(config_path), {})
+        text = config_path.read_text()
+        self.assertIn("pair_strategies: {}\n", text)
+        self.assertIn("fee_pct: 0.001", text)
+        self.assertNotIn("ETH/USDT", text)
+
+    def test_appends_block_when_missing_from_file(self):
+        config_path = self.tmp / "config.yaml"
+        config_path.write_text("dry_run: true\n")
+        update_pair_strategies(str(config_path), {"BTC/USDT": {"strategy": "MacdStrategy", "params": {}}})
+        cfg = load_config(config_path=str(config_path), env_path=str(self.tmp / "no.env"))
+        self.assertEqual(cfg.pair_strategies, {"BTC/USDT": {"strategy": "MacdStrategy", "params": {}}})
         self.assertIn("dry_run: true", config_path.read_text())
 
 

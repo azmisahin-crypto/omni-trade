@@ -131,6 +131,19 @@ Dashboard artık şunları da gösterir:
   aynı kod), sadece tetikleme yolu artık `POST /api/backtest`. Borsadan
   veri çekmek birkaç saniye sürebilir; bu sırada dashboard'un normal
   yenilenmesi bloklanmaz (`ThreadingHTTPServer`).
+- **Tek tıkla dry-run config uygulama**: bir strateji seçip backtest
+  çalıştırdıktan sonra (canlı ayar değil, açıkça bir strateji seçtiysen),
+  "Bu stratejiyi bu coin için uygula" butonuyla sonucu doğrudan o coin
+  için kalıcı `pair_strategies` override'ına yazabilirsin
+  (`POST /api/config/pair-strategy`) — `config.yaml`'ı elle açmana gerek
+  kalmaz. **Sadece `dry_run: true` iken çalışır** — canlı modda (gerçek
+  para) bu uçtan strateji değiştirilemez, bu bilinçli bir güvenlik freni;
+  canlıda değişiklik hâlâ elle `config.yaml` düzenlemeyi + bilinçli bir
+  onayı gerektiriyor. Diğer coin ekle/çıkar işlemlerinde olduğu gibi,
+  bu da sadece dosyayı günceller — çalışan `bot` container'ının yeni
+  stratejiyi görmesi için yeniden başlatılması gerekir. Zaten override'ı
+  olan bir coin için "Override'ı kaldır" butonu görünür, tekrar genel
+  varsayılana döner.
 
 ## 4. Telegram bildirimleri
 
