@@ -21,8 +21,8 @@ Bu dosya, projenin doğuşundan itibaren her fazın **hangi motivasyonla**, **ha
 | **11** | Tek Tıkla Dry-Run Config Uygulama | ✅ Tamamlandı | Bu commit |
 | **12** | Görsel / UX Cilası (v1 — yetersiz bulundu) | ⚠️ Revize edilecek | Bkz. Faz 15 |
 | **13** | Config Hot-Reload — restart olmadan canlı uygulama | ✅ Tamamlandı | Bu commit |
-| **14** | Dashboard Kimlik Doğrulama | ⏳ Sırada | - |
-| **15** | Tam Ekran "Kokpit" Yeniden Tasarımı (v2) | ⏳ Sırada | - |
+| **14** | Dashboard Kimlik Doğrulama (HTTP Basic Auth) | ✅ Tamamlandı | Bu commit |
+| **15** | Tam Ekran "Kokpit" Yeniden Tasarımı (v2) | ✅ Tamamlandı | Bu commit |
 | **16** | Canlı/Dry-run modu + poll aralığı UI'dan | ⏳ Planlandı | - |
 | **17** | Push Tabanlı Güncellemeler (SSE/WebSocket) | ⏳ Planlandı | - |
 | **18** | Yeni Stratejiler + Karşılaştırmalı Şablonlar | ⏳ Planlandı | - |

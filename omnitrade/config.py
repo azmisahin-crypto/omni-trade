@@ -61,6 +61,25 @@ class TelegramConfig:
 
 
 @dataclass
+class WebAuthConfig:
+    """Faz 14: dashboard'a HTTP Basic Auth.
+
+    `enabled` config.yaml'da (sır değil, sadece açık/kapalı). `username`
+    da config.yaml'da durabilir (kullanıcı adı bir sır sayılmaz). `password`
+    ise diğer tüm sırlar gibi (bkz. modül docstring'i) SADECE .env'den
+    (`WEB_AUTH_PASSWORD`) okunur — asla config.yaml'a yazılmaz/yazılmamalı.
+
+    Varsayılan `enabled: False` — geriye dönük uyumluluk için (mevcut
+    kurulumlar aniden dashboard'dan kilitlenmesin). README ve
+    LIVE_TRADING_CHECKLIST.md, dashboard dış dünyaya açılıyorsa bunun
+    açılmasını önerir.
+    """
+    enabled: bool = False
+    username: str = "admin"
+    password: str = ""
+
+
+@dataclass
 class Config:
     dry_run: bool = True
     dry_run_wallet: float = 1000.0
@@ -95,6 +114,7 @@ class Config:
     # eder; elle `Config()` oluşturulursa (testlerde olduğu gibi) varsayılan
     # değer kullanılır.
     config_path: str = "config/config.yaml"
+    web_auth: WebAuthConfig = field(default_factory=WebAuthConfig)
 
 
 def load_config(config_path: str = "config/config.yaml", env_path: str = ".env") -> Config:
@@ -145,6 +165,11 @@ def load_config(config_path: str = "config/config.yaml", env_path: str = ".env")
             max_daily_loss_pct=float(risk_raw.get("max_daily_loss_pct", 0.1)),
         ),
         config_path=config_path,
+        web_auth=WebAuthConfig(
+            enabled=bool(raw.get("web_auth", {}).get("enabled", False)),
+            username=raw.get("web_auth", {}).get("username", "admin"),
+            password=os.environ.get("WEB_AUTH_PASSWORD", ""),
+        ),
     )
     return cfg
 
@@ -159,11 +184,11 @@ def update_pairs(config_path: str, pairs: list) -> None:
     `pairs:` bloğunu hedefleyen bir metin değişikliği yapıyoruz, dosyanın
     geri kalanı (yorumlar dahil) olduğu gibi kalır.
 
-    Not: Bu fonksiyon SADECE dosyayı günceller — o an ÇALIŞAN bot süreci
-    (ayrı bir container/process) bunu otomatik fark etmez, config'i sadece
-    başlangıçta okur. Yeni coin'in canlı botta etkili olması için botun
-    yeniden başlatılması gerekir (bkz. web/server.py'deki
-    `restart_required` alanı ve dashboard'daki uyarı notu).
+    Not: Bu fonksiyon SADECE dosyayı günceller — botu bu fonksiyondan
+    çağırarak DOĞRUDAN uyarmıyoruz. Faz 13'ten beri çalışan bot süreci
+    (ayrı bir container/process) `config.yaml`'ın mtime'ını kendi
+    döngüsünde kontrol edip değişikliği otomatik uyguluyor (bkz.
+    engine.py `_reload_config_if_changed`) — restart gerekmiyor.
     """
     path = Path(config_path)
     text = path.read_text() if path.exists() else ""

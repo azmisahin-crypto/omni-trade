@@ -5,6 +5,8 @@ motive eden' bir görünüm için bu yeterli.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +36,44 @@ def make_handler(storage: Storage, config: Config):
             self.end_headers()
             self.wfile.write(body)
 
+        def _authorized(self) -> bool:
+            """Faz 14: `config.web_auth.enabled` açıksa HTTP Basic Auth
+            zorunlu kılar. `hmac.compare_digest` ile karşılaştırıyoruz
+            (zamanlama saldırısına karşı) — kullanıcı adı/şifre
+            `config.web_auth`'tan gelir (şifre asla config.yaml'da
+            durmaz, sadece `.env`'deki `WEB_AUTH_PASSWORD`'den — bkz.
+            config.py). Kapalıysa (varsayılan) her istek serbest, mevcut
+            davranış korunur.
+            """
+            if not config.web_auth.enabled:
+                return True
+            header = self.headers.get("Authorization", "")
+            if not header.startswith("Basic "):
+                return False
+            try:
+                decoded = base64.b64decode(header[6:]).decode("utf-8")
+                username, _, password = decoded.partition(":")
+            except Exception:  # noqa: BLE001
+                return False
+            return hmac.compare_digest(username, config.web_auth.username) and hmac.compare_digest(
+                password, config.web_auth.password
+            )
+
+        def _require_auth(self) -> bool:
+            if self._authorized():
+                return True
+            body = json.dumps({"error": "Kimlik doğrulama gerekli."}).encode("utf-8")
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="OmniTrade Dashboard"')
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+
         def do_GET(self):
+            if not self._require_auth():
+                return
             parsed = urlparse(self.path)
             path = parsed.path
             query = parse_qs(parsed.query)
@@ -88,6 +127,8 @@ def make_handler(storage: Storage, config: Config):
                 self.send_error(404)
 
         def do_POST(self):
+            if not self._require_auth():
+                return
             parsed = urlparse(self.path)
             if parsed.path == "/api/backtest":
                 self._handle_backtest()

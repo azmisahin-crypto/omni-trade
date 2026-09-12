@@ -10,6 +10,7 @@ edilmiş oluyor.
 """
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
@@ -22,7 +23,7 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from omnitrade.config import Config
+from omnitrade.config import Config, WebAuthConfig
 from omnitrade.storage import Storage
 from omnitrade.web.server import make_handler
 
@@ -410,6 +411,63 @@ class TestConfigPairStrategyEndpoint(ServerTestBase):
     def test_invalid_action_is_400(self):
         status, body = self._post_json("/api/config/pair-strategy", {"symbol": "BTC/USDT", "action": "delete"})
         self.assertEqual(status, 400)
+
+
+class TestWebAuth(unittest.TestCase):
+    """Faz 14: `config.web_auth.enabled` açıkken dashboard HTTP Basic Auth
+    ister. Varsayılan (kapalı) davranış diğer tüm testlerde zaten dolaylı
+    olarak doğrulanıyor (auth hiç engellemiyor) — burada sadece AÇIK
+    olduğu senaryo test ediliyor."""
+
+    def setUp(self):
+        self.storage = Storage(":memory:")
+        self.config = Config(web_auth=WebAuthConfig(enabled=True, username="admin", password="s3cret"))
+        handler = make_handler(self.storage, self.config)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.port = self.server.server_address[1]
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.storage.close()
+
+    def _url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def _auth_header(self, username: str, password: str) -> dict:
+        token = base64.b64encode(f"{username}:{password}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+
+    def test_request_without_credentials_is_401(self):
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(self._url("/api/trades"), timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+        self.assertIn("WWW-Authenticate", ctx.exception.headers)
+
+    def test_request_with_wrong_credentials_is_401(self):
+        req = Request(self._url("/api/trades"), headers=self._auth_header("admin", "yanlis"))
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_request_with_correct_credentials_succeeds(self):
+        req = Request(self._url("/api/trades"), headers=self._auth_header("admin", "s3cret"))
+        with urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+
+    def test_post_endpoints_also_require_auth(self):
+        req = Request(
+            self._url("/api/config/pairs"),
+            data=json.dumps({"symbol": "SOL/USDT", "action": "add"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
 
 
 if __name__ == "__main__":

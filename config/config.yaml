@@ -56,3 +56,10 @@ exchange:
 
 telegram:
   enabled: true               # token/chat_id .env'den okunur
+
+# Faz 14: dashboard'a HTTP Basic Auth. Şifre burada DEĞİL — .env'deki
+# WEB_AUTH_PASSWORD'den okunur. Dashboard SSH tüneli dışında bir yere
+# (örn. genel bir IP/porta) açılıyorsa bunu MUTLAKA true yap.
+web_auth:
+  enabled: false
+  username: admin

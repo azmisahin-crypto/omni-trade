@@ -767,6 +767,82 @@ SADECE dosyayı yazıyor, ama artık bot kendi sürecinde, kendi rızasıyla,
 dosyayı düzenli aralıklarla kontrol edip DEĞİŞİKLİĞİ KENDİSİ
 uyguluyor — iki süreç arasında hiçbir yeni yetki/kanal açılmadı.
 
+## Faz 14 — Dashboard kimlik doğrulama (HTTP Basic Auth) ✅ Tamamlandı
+
+**Neden:** Faz 13 ile birlikte dashboard'un kontrol yüzeyi büyüdü —
+artık sadece izlemekle kalmıyor, coin ekleyip/çıkarabiliyor, strateji
+override uygulayabiliyor, ve bu değişiklikler botta ANINDA etkili
+oluyor (restart bariyeri yok artık). Dashboard'a ağ erişimi olan
+HERKESİN bunları yapabilmesi, "her şey dashboard'dan yönetilebilsin"
+hedefi ilerledikçe büyüyen gerçek bir güvenlik açığıydı — checkpoint
+denetiminde (bkz. PLAN.md) bulunan en önemli eksikti. README'deki
+"sadece SSH tüneli ile eriş" önerisi ağ seviyesinde bir savunma
+sağlıyor ama tek katman; ikinci bir savunma katmanı (kimlik
+doğrulama) eklemek makul.
+
+**Değişen:**
+
+- **`omnitrade/config.py`**: yeni `WebAuthConfig` (`enabled`, `username`,
+  `password`). Diğer tüm sırlar gibi (`EXCHANGE_KEY`, `TELEGRAM_TOKEN`)
+  `password` SADECE `.env`'deki `WEB_AUTH_PASSWORD`'den okunur, asla
+  `config.yaml`'a yazılmaz. `enabled`/`username` sır sayılmadığından
+  `config.yaml`'da. Varsayılan `enabled: false` — mevcut kurulumlar
+  aniden kilitlenmesin diye geriye dönük uyumlu.
+- **`omnitrade/web/server.py`**: `_authorized()`/`_require_auth()` —
+  `web_auth.enabled` açıkken TÜM `GET`/`POST` isteklerinde HTTP Basic
+  Auth zorunlu (`hmac.compare_digest` ile zamanlama saldırısına karşı
+  korumalı karşılaştırma), yoksa/yanlışsa `401` + `WWW-Authenticate`
+  header'ı. Kapalıyken (varsayılan) hiçbir davranış değişmiyor.
+- **`config/config.yaml`** + **`.env.example`**: yeni `web_auth:`
+  bloğu + `WEB_AUTH_PASSWORD` örneği, dashboard SSH tüneli dışına
+  açılıyorsa `enabled: true` yapılması gerektiği notuyla.
+- Testler: `tests/test_server.py::TestWebAuth` (4 test — kimlik bilgisi
+  yokken/ yanlışken 401, doğruyken 200, POST uçlarının da korunduğu).
+  **Toplam: 133 → 137 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Çoklu kullanıcı/rol sistemi, oturum/JWT,
+şifre hashleme (bcrypt vb.). Bu tek-kullanıcılı, kendi kendine
+barındırılan bir araç — HTTP Basic Auth + HTTPS/SSH tüneli (README'de
+zaten önerilen) bu tehdit modeli için yeterli. Daha ağır bir auth
+sistemi, "minimal ama en iyisi" hedefiyle çelişen gereksiz karmaşıklık
+olurdu.
+
+## Faz 15 — Tam ekran "kokpit" yeniden tasarımı (v2) ✅ Tamamlandı
+
+**Neden:** Faz 12'nin ilk hâli (renk/toast/skeleton) kullanıcı geri
+bildirimiyle açıkça reddedildi: "aşağı doğru kayıyor", "her şey tam
+ekranda görülebilmeli", sarı renk beğenilmedi. Bu, kozmetik bir
+düzeltme değil, düzen (layout) düzeyinde bir sorundu — sekiz kart alt
+alta, tek scroll alanı. Faz 13/14 ile mimari temel (restart'sız
+kontrol + auth) oturduktan SONRA bu yeniden tasarım yapıldı (bkz.
+PLAN.md checkpoint — bilinçli sıralama: önce temel, sonra görünüm).
+
+**Değişen — sadece `omnitrade/web/static/index.html` + `app.js`:**
+
+- **Sekmeli "kokpit" düzeni**: sayfa artık tek uzun scroll değil; sabit
+  yükseklikli bir gövde (`100dvh`) içinde üstte başlık+durum+sekme
+  çubuğu, altında SEÇİLİ sekmenin içeriği — sadece o panelin içi (uzun
+  tablo/grid gibi) gerektiğinde kendi içinde kaydırılıyor, sayfanın
+  kendisi kaymıyor. Beş sekme: **Özet & Sinyaller**, **Backtest**,
+  **Karşılaştırma**, **Equity & Drawdown**, **İşlemler**.
+- **Sarı/amber tamamen kaldırıldı** (kullanıcı özellikle belirtti) —
+  "durgun/bağlantı sorunu" durumu artık kırmızı ile gösteriliyor, canlı
+  durum yeşil. Genel palet sadeleştirildi (mavi/yeşil/kırmızı/nötr gri
+  dışında vurgu rengi yok).
+- **Faz 14 auth ile entegrasyon**: `fetch` istekleri 401 alırsa (auth
+  açık ama tarayıcı henüz kimlik bilgisi göndermediyse) kullanıcıya
+  "Bu dashboard korumalı, tarayıcının kimlik bilgisi istemesi normal"
+  şeklinde tek seferlik bir durum mesajı gösteriliyor (Basic Auth
+  popup'ının kendisi tarayıcı tarafından yönetiliyor, biz sadece
+  401'i sessizce yutmuyoruz).
+- Element id'leri ve event akışı KORUNDU — Faz 12'deki tüm işlevsellik
+  (toast, skeleton, boş durumlar, flash, backtest/leaderboard formları)
+  sekme içine taşındı, mantık değişmedi. `test_server.py::test_index_and_app_js_served`
+  değişikliksiz geçiyor.
+
+**Kasıtlı olarak yapılMAYAN:** Bir frontend framework'üne geçiş —
+gerekçe Faz 12'dekiyle aynı (bkz. yukarısı), hâlâ geçerli.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı
