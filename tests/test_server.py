@@ -82,6 +82,16 @@ class TestExistingGetEndpoints(ServerTestBase):
             urlopen(self._url("/does-not-exist"), timeout=5)
         self.assertEqual(ctx.exception.code, 404)
 
+    def test_strategies_endpoint_lists_registered_strategies_with_param_schema(self):
+        strategies = self._get_json("/api/strategies")
+        names = {s["name"] for s in strategies}
+        self.assertEqual(names, {"RsiStrategy", "MacdStrategy", "BollingerStrategy"})
+        rsi = next(s for s in strategies if s["name"] == "RsiStrategy")
+        param_names = {p["name"] for p in rsi["params"]}
+        self.assertEqual(param_names, {"period", "oversold", "overbought"})
+        period_param = next(p for p in rsi["params"] if p["name"] == "period")
+        self.assertEqual(period_param["default"], 14)
+
     def test_empty_db_endpoints_return_sane_defaults(self):
         self.assertEqual(self._get_json("/api/trades"), [])
         self.assertEqual(self._get_json("/api/equity"), [])
@@ -177,6 +187,63 @@ class TestBacktestEndpoint(ServerTestBase):
         })
         self.assertEqual(status, 200)
         self.assertEqual(body["params"]["period"], 9)
+
+
+class TestBacktestBatchEndpoint(ServerTestBase):
+    def test_missing_symbols_or_strategies_is_400(self):
+        status, body = self._post_json("/api/backtest/batch", {"symbols": ["BTC/USDT"]})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+        status, body = self._post_json("/api/backtest/batch", {"strategies": ["RsiStrategy"]})
+        self.assertEqual(status, 400)
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_fetches_each_symbol_once_regardless_of_strategy_count(self, mock_exchange_cls):
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df()
+        status, body = self._post_json("/api/backtest/batch", {
+            "symbols": ["BTC/USDT", "ETH/USDT"],
+            "strategies": ["RsiStrategy", "MacdStrategy", "BollingerStrategy"],
+            "walk_forward": 1,
+        })
+        self.assertEqual(status, 200)
+        # 2 sembol x 3 strateji = 6 satır, ama fetch_ohlcv_df sadece 2 kez
+        # çağrılmalı (sembol başına bir kez, kombinasyon başına değil).
+        self.assertEqual(mock_exchange_cls.return_value.fetch_ohlcv_df.call_count, 2)
+        self.assertEqual(len(body["results"]), 6)
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_results_sorted_by_avg_return_descending(self, mock_exchange_cls):
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df(n=600)
+        status, body = self._post_json("/api/backtest/batch", {
+            "symbols": ["BTC/USDT"],
+            "strategies": ["RsiStrategy", "MacdStrategy", "BollingerStrategy"],
+            "walk_forward": 4,
+        })
+        self.assertEqual(status, 200)
+        returns = [r["avg_return_pct"] for r in body["results"]]
+        self.assertEqual(returns, sorted(returns, reverse=True))
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_unknown_strategy_in_batch_reports_row_error_not_whole_request_failure(self, mock_exchange_cls):
+        mock_exchange_cls.return_value.fetch_ohlcv_df.return_value = _wavy_df()
+        status, body = self._post_json("/api/backtest/batch", {
+            "symbols": ["BTC/USDT"],
+            "strategies": ["RsiStrategy", "NoSuchStrategy"],
+            "walk_forward": 1,
+        })
+        self.assertEqual(status, 200)
+        errored = [r for r in body["results"] if r.get("error")]
+        self.assertEqual(len(errored), 1)
+        self.assertEqual(errored[0]["strategy"], "NoSuchStrategy")
+
+    @patch("omnitrade.web.server.ExchangeClient")
+    def test_exchange_error_for_one_symbol_is_502(self, mock_exchange_cls):
+        mock_exchange_cls.return_value.fetch_ohlcv_df.side_effect = RuntimeError("ağ hatası")
+        status, body = self._post_json("/api/backtest/batch", {
+            "symbols": ["BTC/USDT"], "strategies": ["RsiStrategy"],
+        })
+        self.assertEqual(status, 502)
+        self.assertIn("error", body)
 
 
 if __name__ == "__main__":

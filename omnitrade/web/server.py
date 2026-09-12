@@ -16,7 +16,7 @@ from omnitrade.config import Config
 from omnitrade.exchange import ExchangeClient
 from omnitrade.stats import compute_drawdown_curve, compute_summary_stats
 from omnitrade.storage import Storage
-from omnitrade.strategies import get_strategy
+from omnitrade.strategies import get_strategy, list_strategies
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -62,6 +62,12 @@ def make_handler(storage: Storage, config: Config):
                 symbol = (query.get("symbol") or [None])[0]
                 limit = int((query.get("limit") or [500])[0])
                 self._json(storage.get_signals(symbol=symbol, limit=limit))
+            elif path == "/api/strategies":
+                # Dashboard'daki "Strateji Test Et" paneli, dropdown'ı ve
+                # parametre formunu bu listeden otomatik kurar — yeni bir
+                # strateji eklendiğinde (STRATEGIES sözlüğüne kayıt) burada
+                # da otomatik görünür, frontend değişikliği gerekmez.
+                self._json(list_strategies())
             elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
             elif path == "/app.js":
@@ -73,6 +79,8 @@ def make_handler(storage: Storage, config: Config):
             parsed = urlparse(self.path)
             if parsed.path == "/api/backtest":
                 self._handle_backtest()
+            elif parsed.path == "/api/backtest/batch":
+                self._handle_backtest_batch()
             else:
                 self.send_error(404)
 
@@ -176,6 +184,99 @@ def make_handler(storage: Storage, config: Config):
                 payload["worst_period_pct"] = min(returns)
                 payload["best_period_pct"] = max(returns)
             self._json(payload)
+
+        def _handle_backtest_batch(self):
+            """Faz 9: leaderboard — birden fazla strateji × coin kombinasyonunu
+            TEK istekte çalıştırıp getiriye göre sıralı döner. Her sembol için
+            OHLCV verisi bir kez çekilir (kombinasyon sayısı kadar değil),
+            borsaya gereksiz tekrar istek atılmasın diye. Her strateji kendi
+            varsayılan parametreleriyle çalışır (canlı config'i etkilemez,
+            `pair_strategies`'i override etmez) — amaç "hangi strateji bu
+            coinde genel olarak daha iyi" sorusuna hızlı, kaba bir cevap.
+            """
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            symbols = req.get("symbols") or []
+            strategies = req.get("strategies") or []
+            if not symbols or not strategies:
+                self._json({"error": "'symbols' ve 'strategies' listeleri zorunlu."}, status=400)
+                return
+
+            timeframe = req.get("timeframe") or config.timeframe
+            limit = max(50, min(int(req.get("limit") or 1000), 1500))
+            n_splits = max(1, min(int(req.get("walk_forward") or 4), 12))
+
+            try:
+                exchange = ExchangeClient(config.exchange.name, config.exchange.api_key, config.exchange.api_secret, dry_run=True)
+            except Exception as exc:  # noqa: BLE001
+                self._json({"error": f"Borsa bağlantısı kurulamadı: {exc}"}, status=502)
+                return
+
+            dfs = {}
+            for symbol in symbols:
+                try:
+                    dfs[symbol] = exchange.fetch_ohlcv_df(symbol, timeframe=timeframe, limit=limit)
+                except Exception as exc:  # noqa: BLE001
+                    self._json({"error": f"{symbol} için geçmiş veri çekilemedi: {exc}"}, status=502)
+                    return
+
+            rows = []
+            for symbol in symbols:
+                df = dfs[symbol]
+                for strategy_name in strategies:
+                    try:
+                        strategy = get_strategy(strategy_name, None)
+                    except ValueError as exc:
+                        rows.append({"symbol": symbol, "strategy": strategy_name, "error": str(exc)})
+                        continue
+                    try:
+                        if n_splits > 1:
+                            results = run_walk_forward(
+                                df, strategy, symbol, n_splits=n_splits,
+                                fee_pct=config.fee_pct, slippage_pct=config.slippage_pct,
+                                risk_config=config.risk,
+                            )
+                        else:
+                            results = [run_backtest(
+                                df, strategy, symbol,
+                                fee_pct=config.fee_pct, slippage_pct=config.slippage_pct,
+                                risk_config=config.risk,
+                            )]
+                    except Exception as exc:  # noqa: BLE001
+                        rows.append({"symbol": symbol, "strategy": strategy_name, "error": str(exc)})
+                        continue
+                    if not results:
+                        rows.append({"symbol": symbol, "strategy": strategy_name, "error": "yetersiz veri"})
+                        continue
+
+                    returns = [r.total_return_pct for r in results]
+                    rows.append({
+                        "symbol": symbol,
+                        "strategy": strategy_name,
+                        "periods": len(results),
+                        "trades": sum(r.trades for r in results),
+                        "avg_return_pct": sum(returns) / len(returns),
+                        "worst_period_pct": min(returns),
+                        "best_period_pct": max(returns),
+                        "avg_win_rate": sum(r.win_rate for r in results) / len(results),
+                        "avg_max_drawdown_pct": sum(r.max_drawdown_pct for r in results) / len(results),
+                    })
+
+            # En iyisi üstte — hata satırları (avg_return_pct yok) en sona düşer.
+            rows.sort(key=lambda r: r.get("avg_return_pct", float("-inf")), reverse=True)
+
+            self._json({
+                "timeframe": timeframe,
+                "walk_forward": n_splits,
+                "candles": {s: len(dfs[s]) for s in symbols},
+                "results": rows,
+            })
 
         def _serve_static(self, filename: str, content_type: str):
             file_path = STATIC_DIR / filename

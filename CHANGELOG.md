@@ -460,6 +460,81 @@ akışsa, sıradaki mantıklı adım budur.
 
 ---
 
+## Faz 8 — dashboard'daki strateji formu artık backend'den otomatik kuruluyor ✅ Tamamlandı
+
+**Neden:** Faz 7'de `MacdStrategy` ve `BollingerStrategy` eklendi ama
+dashboard'daki "Strateji Test Et" formu hâlâ sadece RSI'ye özel 3 alan
+(periyot/aşırı satım/aşırı alım) gösteriyordu — yeni stratejiler API
+üzerinden (`POST /api/backtest` body'sinde `strategy`+`params`) test
+edilebiliyordu ama UI'dan değil. Kullanıcının sorduğu asıl soru buydu:
+"stratejileri tek tek eklerken UI'ı da elle mi güncelleyeceğiz, yoksa
+otomatik mi gelsin?" Cevap: strateji **mantığı** (indikatör hesabı) kod
+olarak kalmalı — bu zaten az kod (~50-70 satır), UI'dan yazılabilir bir
+şey değil ve öyle olsa test edilebilirliği azaltır. Ama strateji
+**seçimi ve parametre formu** tamamen otomatik olmalı.
+
+**Değişen:**
+- `omnitrade/strategies/__init__.py`: yeni `list_strategies()` — her
+  kayıtlı stratejinin adını ve `__init__` imzasından introspect edilen
+  parametre/varsayılan listesini döndürür. Yeni strateji eklerken tek
+  gereken hâlâ `STRATEGIES` sözlüğüne kayıt; frontend'e hiç dokunulmaz.
+- `omnitrade/web/server.py`: yeni `GET /api/strategies` endpoint'i,
+  `list_strategies()`'i JSON olarak döner.
+- `omnitrade/web/static/index.html` + `app.js`: RSI'ye özel 3 hardcoded
+  input kaldırıldı. Yerine: sayfa açılışında `/api/strategies` çekilip
+  bir strateji dropdown'ı kuruluyor; dropdown değiştiğinde o stratejinin
+  parametre alanları (`btParams` container'ı) otomatik render ediliyor.
+  "— canlı ayar —" seçiliyse (varsayılan) hiç strateji/params
+  gönderilmiyor, önceki davranış (o coin için canlıda çalışan
+  strateji/parametreler kullanılır) korunuyor.
+- `tests/test_server.py` + `tests/test_strategy.py`: `/api/strategies`
+  endpoint'i ve `list_strategies()` için testler. **Toplam: 93 → 95 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Parametre tipleri hâlâ hepsi `number`
+varsayılıyor (şu ana kadarki tüm stratejiler sayısal parametre alıyor).
+İleride string/bool parametre alan bir strateji eklenirse `list_strategies()`
+her parametrenin tipini de döndürecek şekilde genişletilmeli — şimdiden
+yapmak spekülatif olurdu.
+
+---
+
+## Faz 9 — çoklu strateji × coin karşılaştırma (leaderboard) ✅ Tamamlandı
+
+**Neden:** Faz 7-8 ile 3 strateji (RSI/MACD/Bollinger) ve bunları UI'dan
+otomatik seçebilme geldi, ama "hangisi bu coinde daha iyi" sorusunu
+cevaplamak için hâlâ her kombinasyonu tek tek `/api/backtest`'e sokup
+sonuçları elle karşılaştırmak gerekiyordu. Hedef "en düşük parayla en
+iyi stratejiyi hızlıca bulmak" olduğuna göre, karşılaştırmanın kendisi
+de tek işlemlik olmalıydı.
+
+**Değişen:**
+- `omnitrade/web/server.py`: yeni `POST /api/backtest/batch` endpoint'i.
+  Gövde: `{symbols: [...], strategies: [...], timeframe?, limit?,
+  walk_forward?}`. Her sembol için OHLCV verisi **bir kez** çekilir
+  (kombinasyon sayısı kadar değil — borsaya gereksiz tekrar istek
+  atılmaz), sonra her strateji o veri üzerinde kendi varsayılan
+  parametreleriyle çalıştırılır (canlı config'i etkilemez, tek amaç
+  kaba/hızlı bir "genel olarak hangisi iyi" sinyali). Sonuçlar ortalama
+  getiriye göre azalan sırada döner. Bir kombinasyonda hata olursa
+  (bilinmeyen strateji, yetersiz veri) tüm istek değil sadece o satır
+  `error` alanıyla işaretlenir — 6 kombinasyondan 1'i patlarsa diğer 5'i
+  kaybetmeyelim diye.
+- `omnitrade/web/static/index.html` + `app.js`: yeni "Karşılaştırma
+  (Leaderboard)" paneli — coin ve strateji çoklu-seçim kutuları
+  (varsayılan: hepsi seçili), mum sayısı/dönem sayısı, "Karşılaştır"
+  butonu. Sonuç tablosu zaten sıralı geldiği için frontend'de ayrıca
+  sıralama yapılmıyor, sadece render ediliyor.
+- `tests/test_server.py`: `TestBacktestBatchEndpoint` — eksik
+  symbols/strategies → 400, sembol başına tek fetch (mock call_count
+  ile doğrulanıyor), sıralamanın doğruluğu, kombinasyon bazlı hata
+  izolasyonu, borsa hatası → 502. **Toplam: 95 → 100 test.**
+
+**Kasıtlı olarak yapılMAYAN:** Leaderboard'daki sonuçları tek tıkla
+`pair_strategies`'e (canlı config) yazma — bu hâlâ Faz 11'in işi,
+burada sadece keşif/karşılaştırma var.
+
+---
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

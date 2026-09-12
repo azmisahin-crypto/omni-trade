@@ -49,6 +49,8 @@
     color: #9ca3af; text-transform: uppercase; letter-spacing: .03em;
   }
   .backtest-form .hint { text-transform: none; color: #4b5563; font-size: 11px; letter-spacing: normal; }
+  .bt-params { display: flex; gap: 14px; flex-wrap: wrap; }
+  .bt-params label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #9ca3af; display: flex; flex-direction: column; gap: 4px; }
   .backtest-form input, .backtest-form select {
     background: #12141a; border: 1px solid #2a2e37; border-radius: 8px;
     color: #e6e6e6; padding: 8px 10px; font-size: 14px; width: 130px;
@@ -112,19 +114,40 @@
       <label>Dönem sayısı (walk-forward)
         <input id="btSplits" type="number" min="1" max="12" value="4" />
       </label>
-      <label>RSI periyodu <span class="hint">(boş = canlı ayar)</span>
-        <input id="btPeriod" type="number" min="2" placeholder="örn. 14" />
+      <label>Strateji <span class="hint">(boş = canlı ayar)</span>
+        <select id="btStrategy"><option value="">— canlı ayar —</option></select>
       </label>
-      <label>Aşırı satım <span class="hint">(boş = canlı ayar)</span>
-        <input id="btOversold" type="number" min="1" max="49" placeholder="örn. 30" />
-      </label>
-      <label>Aşırı alım <span class="hint">(boş = canlı ayar)</span>
-        <input id="btOverbought" type="number" min="51" max="99" placeholder="örn. 70" />
-      </label>
+      <span id="btParams" class="bt-params"></span>
       <button id="btRun" type="button">Çalıştır</button>
     </div>
     <div id="btStatus" class="bt-status"></div>
     <div id="btResults"></div>
+  </div>
+
+  <div class="card">
+    <h2>Karşılaştırma (Leaderboard)</h2>
+    <p style="color:#6b7280;font-size:13px;margin-top:-8px;">
+      Birden fazla strateji × coin kombinasyonunu tek seferde çalıştırıp
+      getiriye göre sıralı gösterir — her strateji kendi varsayılan
+      parametreleriyle çalışır, canlı config'i etkilemez.
+    </p>
+    <div class="backtest-form">
+      <label>Coinler
+        <select id="lbSymbols" multiple size="4"></select>
+      </label>
+      <label>Stratejiler
+        <select id="lbStrategies" multiple size="4"></select>
+      </label>
+      <label>Mum sayısı
+        <input id="lbLimit" type="number" min="50" max="1500" value="1000" />
+      </label>
+      <label>Dönem sayısı (walk-forward)
+        <input id="lbSplits" type="number" min="1" max="12" value="4" />
+      </label>
+      <button id="lbRun" type="button">Karşılaştır</button>
+    </div>
+    <div id="lbStatus" class="bt-status"></div>
+    <div id="lbResults"></div>
   </div>
 
   <div class="card">

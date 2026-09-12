@@ -109,6 +109,58 @@ async function refreshSignals() {
   populateBacktestSymbols(signals.map(s => s.symbol));
 }
 
+// --- Faz 8: strateji dropdown + parametre formu backend'den otomatik ---
+
+let strategySchemas = [];
+
+async function loadStrategies() {
+  strategySchemas = await fetchJSON("/api/strategies");
+  const select = document.getElementById("btStrategy");
+  const lbSelect = document.getElementById("lbStrategies");
+  for (const s of strategySchemas) {
+    const opt = document.createElement("option");
+    opt.value = s.name;
+    opt.textContent = s.name;
+    select.appendChild(opt);
+
+    const lbOpt = document.createElement("option");
+    lbOpt.value = s.name;
+    lbOpt.textContent = s.name;
+    lbOpt.selected = true; // varsayılan: hepsini karşılaştır
+    lbSelect.appendChild(lbOpt);
+  }
+  renderStrategyParams();
+}
+
+function renderStrategyParams() {
+  const strategyName = document.getElementById("btStrategy").value;
+  const container = document.getElementById("btParams");
+  container.innerHTML = "";
+  const schema = strategySchemas.find(s => s.name === strategyName);
+  if (!schema) return; // "— canlı ayar —" seçiliyse hiç parametre alanı gösterme
+  for (const p of schema.params) {
+    const label = document.createElement("label");
+    label.textContent = p.name;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.dataset.param = p.name;
+    input.placeholder = p.default === null ? "" : `örn. ${p.default}`;
+    label.appendChild(input);
+    container.appendChild(label);
+  }
+}
+
+document.getElementById("btStrategy").addEventListener("change", renderStrategyParams);
+
+function collectStrategyParams() {
+  const params = {};
+  document.querySelectorAll("#btParams input[data-param]").forEach(input => {
+    if (input.value !== "") params[input.dataset.param] = parseFloat(input.value);
+  });
+  return params;
+}
+
 // --- Faz 6: dashboard'dan backtest/walk-forward ---
 
 function populateBacktestSymbols(symbols) {
@@ -119,16 +171,30 @@ function populateBacktestSymbols(symbols) {
   // Sadece fark varsa yeniden kur — her poll'da select'i sıfırlamak
   // kullanıcının açık dropdown'ını/seçimini bozar.
   const same = existing.size === incoming.size && [...existing].every(v => incoming.has(v));
-  if (same) return;
-  select.innerHTML = "";
-  for (const sym of symbols) {
-    const opt = document.createElement("option");
-    opt.value = sym;
-    opt.textContent = sym;
-    select.appendChild(opt);
+  if (!same) {
+    select.innerHTML = "";
+    for (const sym of symbols) {
+      const opt = document.createElement("option");
+      opt.value = sym;
+      opt.textContent = sym;
+      select.appendChild(opt);
+    }
+    if (symbols.includes(current)) select.value = current;
+    else if (selectedSymbol && symbols.includes(selectedSymbol)) select.value = selectedSymbol;
   }
-  if (symbols.includes(current)) select.value = current;
-  else if (selectedSymbol && symbols.includes(selectedSymbol)) select.value = selectedSymbol;
+
+  const lbSelect = document.getElementById("lbSymbols");
+  const lbExisting = new Set(Array.from(lbSelect.options).map(o => o.value));
+  if (lbExisting.size !== incoming.size || ![...lbExisting].every(v => incoming.has(v))) {
+    lbSelect.innerHTML = "";
+    for (const sym of symbols) {
+      const opt = document.createElement("option");
+      opt.value = sym;
+      opt.textContent = sym;
+      opt.selected = true; // varsayılan: hepsini karşılaştır
+      lbSelect.appendChild(opt);
+    }
+  }
 }
 
 function fmtPct(v) {
@@ -152,14 +218,11 @@ async function runBacktest() {
     limit: parseInt(document.getElementById("btLimit").value, 10) || 1000,
     walk_forward: parseInt(document.getElementById("btSplits").value, 10) || 4,
   };
-  const period = document.getElementById("btPeriod").value;
-  const oversold = document.getElementById("btOversold").value;
-  const overbought = document.getElementById("btOverbought").value;
-  if (period || oversold || overbought) {
-    body.params = {};
-    if (period) body.params.period = parseInt(period, 10);
-    if (oversold) body.params.oversold = parseInt(oversold, 10);
-    if (overbought) body.params.overbought = parseInt(overbought, 10);
+  const strategyName = document.getElementById("btStrategy").value;
+  if (strategyName) {
+    body.strategy = strategyName;
+    const params = collectStrategyParams();
+    if (Object.keys(params).length) body.params = params;
   }
 
   button.disabled = true;
@@ -214,6 +277,80 @@ async function runBacktest() {
 
 document.getElementById("btRun").addEventListener("click", runBacktest);
 
+// --- Faz 9: leaderboard — çoklu strateji × coin karşılaştırma ---
+
+async function runLeaderboard() {
+  const symbols = Array.from(document.getElementById("lbSymbols").selectedOptions).map(o => o.value);
+  const strategies = Array.from(document.getElementById("lbStrategies").selectedOptions).map(o => o.value);
+  const status = document.getElementById("lbStatus");
+  const results = document.getElementById("lbResults");
+  const button = document.getElementById("lbRun");
+
+  if (!symbols.length || !strategies.length) {
+    status.textContent = "En az bir coin ve bir strateji seç.";
+    status.classList.add("error");
+    return;
+  }
+
+  const body = {
+    symbols,
+    strategies,
+    limit: parseInt(document.getElementById("lbLimit").value, 10) || 1000,
+    walk_forward: parseInt(document.getElementById("lbSplits").value, 10) || 4,
+  };
+
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = `${symbols.length} coin × ${strategies.length} strateji test ediliyor... (biraz sürebilir)`;
+  results.innerHTML = "";
+
+  try {
+    const res = await fetch("/api/backtest/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = data.error || `Hata (HTTP ${res.status})`;
+      status.classList.add("error");
+      return;
+    }
+
+    status.textContent = `${data.results.length} kombinasyon test edildi, en iyi getiriye göre sıralı.`;
+    let html = `<table class="bt-periods"><thead><tr>
+      <th>#</th><th>Coin</th><th>Strateji</th><th>Ort. Getiri</th><th>En Kötü</th><th>En İyi</th><th>Kazanma Oranı</th><th>Max Drawdown</th><th>İşlem</th>
+    </tr></thead><tbody>`;
+    data.results.forEach((r, i) => {
+      if (r.error) {
+        html += `<tr><td>${i + 1}</td><td>${r.symbol}</td><td>${r.strategy}</td>
+          <td colspan="6" class="bt-neg">${r.error}</td></tr>`;
+        return;
+      }
+      html += `<tr>
+        <td>${i + 1}</td>
+        <td>${r.symbol}</td>
+        <td>${r.strategy}</td>
+        <td>${fmtPct(r.avg_return_pct)}</td>
+        <td>${fmtPct(r.worst_period_pct)}</td>
+        <td>${fmtPct(r.best_period_pct)}</td>
+        <td>${(r.avg_win_rate * 100).toFixed(1)}%</td>
+        <td>${r.avg_max_drawdown_pct.toFixed(2)}%</td>
+        <td>${r.trades}</td>
+      </tr>`;
+    });
+    html += "</tbody></table>";
+    results.innerHTML = html;
+  } catch (err) {
+    status.textContent = `İstek başarısız: ${err}`;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("lbRun").addEventListener("click", runLeaderboard);
+
 async function selectSymbol(symbol) {
   selectedSymbol = symbol;
   document.querySelectorAll(".signal-card").forEach(el => {
@@ -265,4 +402,5 @@ async function refreshAll() {
 }
 
 refreshAll();
+loadStrategies();
 setInterval(refreshAll, 10000);

@@ -6,6 +6,7 @@ from omnitrade.strategies.base import Action
 from omnitrade.strategies.rsi_strategy import RsiStrategy
 from omnitrade.strategies.macd_strategy import MacdStrategy
 from omnitrade.strategies.bollinger_strategy import BollingerStrategy
+from omnitrade.strategies import list_strategies
 
 
 def make_df(closes):
@@ -99,6 +100,18 @@ class TestBollingerStrategy(unittest.TestCase):
         df = make_df(closes)
         signal = strat.generate_signal(df, "BTC/USDT")
         self.assertEqual(signal.action, Action.SELL)
+
+
+class TestListStrategies(unittest.TestCase):
+    def test_returns_every_registered_strategy_with_defaults(self):
+        schemas = list_strategies()
+        by_name = {s["name"]: s for s in schemas}
+        self.assertIn("RsiStrategy", by_name)
+        self.assertIn("MacdStrategy", by_name)
+        self.assertIn("BollingerStrategy", by_name)
+
+        rsi_params = {p["name"]: p["default"] for p in by_name["RsiStrategy"]["params"]}
+        self.assertEqual(rsi_params, {"period": 14, "oversold": 30, "overbought": 70})
 
 
 if __name__ == "__main__":
