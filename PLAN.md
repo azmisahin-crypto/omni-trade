@@ -25,7 +25,7 @@ Bu dosya, projenin doğuşundan itibaren her fazın **hangi motivasyonla**, **ha
 | **15** | Tam Ekran "Kokpit" Yeniden Tasarımı (v2) | ✅ Tamamlandı | Bu commit |
 | **16** | Canlı/Dry-run modu + poll aralığı UI'dan | ✅ Tamamlandı | Bu commit |
 | **17** | Push Tabanlı Güncellemeler (SSE) | ✅ Tamamlandı | Bu commit |
-| **18** | Yeni Stratejiler + Karşılaştırmalı Şablonlar | ⏳ Planlandı | - |
+| **18** | Yeni Stratejiler + Karşılaştırmalı Şablonlar | ✅ Tamamlandı | Bu commit |
 
 ## Checkpoint (Faz 12 sonrası) — mimari gözden geçirme + rakip analizi
 
@@ -172,3 +172,30 @@ yazmadan doğal biçimde çalışıyor.
 
 Ayrıntılı "neden" + "değişen dosyalar" kaydı her zamanki gibi
 `CHANGELOG.md`'ye eklendi; buradaki not sadece kısa bir özet.
+
+## Faz 18 sonrası not — iki yeni strateji + leaderboard şablonları
+
+PLAN.md'deki Faz 18 iki ayrı parçadan oluşuyordu, ikisi de bağımsız
+ama birbirini tamamlıyor:
+
+1. **Yeni stratejiler**: `StochasticStrategy` ve `DonchianStrategy` —
+   ikisi de ilk kez `high`/`low` kolonlarını kullanan stratejiler
+   (RSI/MACD/Bollinger sadece `close`'a bakıyordu). Bilinçli olarak
+   ZIT felsefeli bir çift seçildi (Stochastic mean-reversion, Donchian
+   breakout/trend-takip) — aynı ham high/low verisini iki farklı
+   yorumla ele alıp yan yana backtest etmek öğretici olsun diye (bkz.
+   `donchian_strategy.py` docstring'i). `STRATEGIES` sözlüğüne
+   eklendikleri an dashboard'daki strateji dropdown'ı/parametre formu
+   VE leaderboard paneli otomatik güncellendi — Faz 8'in introspection
+   mekanizması sayesinde frontend'e HİÇBİR dokunuş gerekmedi.
+2. **Leaderboard şablonları**: Faz 9'daki karşılaştırma panelinde her
+   seferinde aynı coin/strateji kombinasyonunu elle yeniden seçmek
+   yerine, bir seçimi isimle kaydedip (`leaderboard_templates` tablosu,
+   upsert) tek tıkla geri yükleme. Bilinçli olarak DAR tutuldu: şablonlar
+   sadece bir UI kısayolu, botun canlı `strategy`/`pair_strategies`
+   davranışını ETKİLEMİYOR — bu yüzden Faz 16/17'deki gibi bir auth/
+   audit-log zorunluluğu yok (gerçek para riski taşımıyor).
+
+Testler: `TestStochasticStrategy`, `TestDonchianStrategy`,
+`TestLeaderboardTemplates` (storage), `TestLeaderboardTemplatesEndpoint`
+(server) — 167 → 191 test, hepsi yeşil.

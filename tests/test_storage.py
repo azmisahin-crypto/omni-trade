@@ -116,5 +116,69 @@ class TestModeAuditLog(unittest.TestCase):
         self.assertFalse(hasattr(self.storage, "clear_mode_audit_log"))
 
 
+class TestLeaderboardTemplates(unittest.TestCase):
+    """Faz 18: Karşılaştırma (Leaderboard) paneli için isimlendirilmiş
+    coin/strateji seçimi kaydetme/listeleme/silme."""
+
+    def setUp(self):
+        self.storage = Storage(":memory:")
+
+    def tearDown(self):
+        self.storage.close()
+
+    def test_save_and_list_a_template(self):
+        self.storage.save_leaderboard_template(
+            name="Ana coinler", symbols=["BTC/USDT", "ETH/USDT"],
+            strategies=["RsiStrategy", "MacdStrategy"], candle_limit=1000, walk_forward=4,
+        )
+        templates = self.storage.get_leaderboard_templates()
+        self.assertEqual(len(templates), 1)
+        t = templates[0]
+        self.assertEqual(t["name"], "Ana coinler")
+        self.assertEqual(t["symbols"], ["BTC/USDT", "ETH/USDT"])
+        self.assertEqual(t["strategies"], ["RsiStrategy", "MacdStrategy"])
+        self.assertEqual(t["candle_limit"], 1000)
+        self.assertEqual(t["walk_forward"], 4)
+
+    def test_saving_same_name_again_updates_instead_of_duplicating(self):
+        self.storage.save_leaderboard_template(
+            name="Ana coinler", symbols=["BTC/USDT"],
+            strategies=["RsiStrategy"], candle_limit=500, walk_forward=2,
+        )
+        self.storage.save_leaderboard_template(
+            name="Ana coinler", symbols=["BTC/USDT", "SOL/USDT"],
+            strategies=["MacdStrategy"], candle_limit=1000, walk_forward=6,
+        )
+        templates = self.storage.get_leaderboard_templates()
+        self.assertEqual(len(templates), 1)
+        self.assertEqual(templates[0]["symbols"], ["BTC/USDT", "SOL/USDT"])
+        self.assertEqual(templates[0]["strategies"], ["MacdStrategy"])
+        self.assertEqual(templates[0]["candle_limit"], 1000)
+        self.assertEqual(templates[0]["walk_forward"], 6)
+
+    def test_listed_alphabetically_by_name(self):
+        self.storage.save_leaderboard_template(
+            name="Zeta", symbols=["BTC/USDT"], strategies=["RsiStrategy"],
+            candle_limit=500, walk_forward=2,
+        )
+        self.storage.save_leaderboard_template(
+            name="Alfa", symbols=["ETH/USDT"], strategies=["MacdStrategy"],
+            candle_limit=500, walk_forward=2,
+        )
+        names = [t["name"] for t in self.storage.get_leaderboard_templates()]
+        self.assertEqual(names, ["Alfa", "Zeta"])
+
+    def test_delete_existing_template_returns_true(self):
+        self.storage.save_leaderboard_template(
+            name="Ana coinler", symbols=["BTC/USDT"], strategies=["RsiStrategy"],
+            candle_limit=500, walk_forward=2,
+        )
+        self.assertTrue(self.storage.delete_leaderboard_template("Ana coinler"))
+        self.assertEqual(self.storage.get_leaderboard_templates(), [])
+
+    def test_delete_nonexistent_template_returns_false(self):
+        self.assertFalse(self.storage.delete_leaderboard_template("yok böyle bir şey"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -220,6 +220,8 @@ def make_handler(storage: Storage, config: Config):
                 self._json(storage.get_mode_audit_log(limit=limit))
             elif path == "/api/stream":
                 self._handle_stream()
+            elif path == "/api/leaderboard/templates":
+                self._json(storage.get_leaderboard_templates())
             elif path in ("/", "/index.html"):
                 self._serve_static("index.html", "text/html")
             elif path == "/app.js":
@@ -243,6 +245,8 @@ def make_handler(storage: Storage, config: Config):
                 self._handle_poll_interval()
             elif parsed.path == "/api/system/live-mode":
                 self._handle_live_mode()
+            elif parsed.path == "/api/leaderboard/templates":
+                self._handle_leaderboard_templates()
             else:
                 self.send_error(404)
 
@@ -758,6 +762,85 @@ def make_handler(storage: Storage, config: Config):
                     "restart atma."
                 ),
             })
+
+        def _handle_leaderboard_templates(self):
+            """Faz 18: Karşılaştırma (Leaderboard) panelindeki coin/strateji/
+            mum sayısı/walk-forward seçimini isimlendirip kaydetme (upsert)
+            ve silme. `_handle_config_pairs` ile AYNI desende — tek endpoint,
+            gövdedeki `action` alanına göre dallanıyor (bu stdlib `http.server`
+            kurulumunda DELETE metodu implemente edilmediği için, bkz. do_POST
+            — silme de POST + action='delete' ile yapılıyor).
+
+            Bu şablonlar sadece bir dashboard KISAYOLU — `pair_strategies`
+            gibi botun canlı davranışını ETKİLEMEZ, sadece leaderboard
+            formunu ön dolduruyor. Bu yüzden Faz 16/17'deki gibi bir
+            auth/onay/audit-log zorunluluğu YOK (gerçek para riski taşımıyor).
+            """
+            try:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw_body = self.rfile.read(length) if length else b"{}"
+                req = json.loads(raw_body or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "Geçersiz JSON gövdesi."}, status=400)
+                return
+
+            action = req.get("action")
+            if action not in ("save", "delete"):
+                self._json({"error": "'action' 'save' ya da 'delete' olmalı."}, status=400)
+                return
+
+            name = str(req.get("name") or "").strip()
+            if not name:
+                self._json({"error": "'name' zorunlu."}, status=400)
+                return
+
+            if action == "delete":
+                if storage.delete_leaderboard_template(name):
+                    self._json({"deleted": True, "name": name})
+                else:
+                    self._json({"error": f"'{name}' adında bir şablon yok."}, status=404)
+                return
+
+            symbols = req.get("symbols")
+            strategies = req.get("strategies")
+            if not isinstance(symbols, list) or not symbols:
+                self._json({"error": "'symbols' boş olmayan bir liste olmalı."}, status=400)
+                return
+            if not isinstance(strategies, list) or not strategies:
+                self._json({"error": "'strategies' boş olmayan bir liste olmalı."}, status=400)
+                return
+            for strategy_name in strategies:
+                try:
+                    get_strategy(strategy_name, None)
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, status=400)
+                    return
+
+            # Faz 6/9'daki `/api/backtest`/`/api/backtest/batch` ile AYNI
+            # sınırlar (bkz. _handle_backtest_batch) — burada REDDETMEK
+            # yerine SESSİZCE kırpıyoruz, ki kaydedilen bir şablon daha
+            # sonra "Uygula"ya basılıp gerçekten çalıştırıldığında batch
+            # endpoint'inin kendi sınırına takılıp sürpriz bir hata
+            # vermesin (iki yerde aynı sınırın ayrı ayrı doğrulanması,
+            # ileride biri değişip diğeri unutulursa tutarsızlık riski
+            # taşırdı — bu yüzden burada REDDETMEK yerine aynı formülle
+            # kırpmak tercih edildi).
+            try:
+                candle_limit = max(50, min(int(req.get("candle_limit", 1000)), 1500))
+            except (TypeError, ValueError):
+                self._json({"error": "'candle_limit' tam sayı olmalı."}, status=400)
+                return
+            try:
+                walk_forward = max(1, min(int(req.get("walk_forward", 4)), 12))
+            except (TypeError, ValueError):
+                self._json({"error": "'walk_forward' tam sayı olmalı."}, status=400)
+                return
+
+            saved = storage.save_leaderboard_template(
+                name=name, symbols=symbols, strategies=strategies,
+                candle_limit=candle_limit, walk_forward=walk_forward,
+            )
+            self._json(saved)
 
         def _sse_send(self, payload: dict) -> None:
             body = json.dumps(payload)

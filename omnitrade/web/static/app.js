@@ -609,6 +609,107 @@ async function runLeaderboard() {
 
 document.getElementById("lbRun").addEventListener("click", runLeaderboard);
 
+// --- Faz 18: Karşılaştırma (Leaderboard) şablonları — isimlendirilmiş
+// coin/strateji/mum sayısı/walk-forward seçimini kaydedip tek tıkla
+// tekrar uygulama. Sunucu tarafı sadece kaydet/listele/sil yapıyor
+// (bkz. storage.py) — "Karşılaştır"ı gerçekten çalıştırmak hâlâ mevcut
+// runLeaderboard()'un işi, şablon sadece formu ÖN DOLDURUYOR.
+let leaderboardTemplates = {};
+
+async function loadLeaderboardTemplates() {
+  const templates = await fetchJSON("/api/leaderboard/templates");
+  leaderboardTemplates = Object.fromEntries(templates.map(t => [t.name, t]));
+  const select = document.getElementById("lbTemplateSelect");
+  const current = select.value;
+  select.innerHTML = '<option value="">— seç —</option>';
+  for (const t of templates) {
+    const opt = document.createElement("option");
+    opt.value = t.name;
+    opt.textContent = t.name;
+    select.appendChild(opt);
+  }
+  if (templates.some(t => t.name === current)) select.value = current;
+}
+
+function applyLeaderboardTemplate() {
+  const name = document.getElementById("lbTemplateSelect").value;
+  const t = leaderboardTemplates[name];
+  if (!t) {
+    setStatus("lbTemplateStatus", "Önce bir şablon seç.", "error");
+    return;
+  }
+  for (const opt of document.getElementById("lbSymbols").options) {
+    opt.selected = t.symbols.includes(opt.value);
+  }
+  for (const opt of document.getElementById("lbStrategies").options) {
+    opt.selected = t.strategies.includes(opt.value);
+  }
+  document.getElementById("lbLimit").value = t.candle_limit;
+  document.getElementById("lbSplits").value = t.walk_forward;
+  setStatus("lbTemplateStatus", `"${name}" şablonu forma uygulandı.`, "success");
+}
+
+async function saveLeaderboardTemplate() {
+  const nameInput = document.getElementById("lbTemplateName");
+  const name = nameInput.value.trim();
+  const symbols = Array.from(document.getElementById("lbSymbols").selectedOptions).map(o => o.value);
+  const strategies = Array.from(document.getElementById("lbStrategies").selectedOptions).map(o => o.value);
+  if (!name) {
+    setStatus("lbTemplateStatus", "Şablon için bir isim yaz.", "error");
+    return;
+  }
+  if (!symbols.length || !strategies.length) {
+    setStatus("lbTemplateStatus", "Kaydetmeden önce en az bir coin ve bir strateji seç.", "error");
+    return;
+  }
+  try {
+    const res = await fetch("/api/leaderboard/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "save", name, symbols, strategies,
+        candle_limit: parseInt(document.getElementById("lbLimit").value, 10) || 1000,
+        walk_forward: parseInt(document.getElementById("lbSplits").value, 10) || 4,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Hata (HTTP ${res.status})`);
+    nameInput.value = "";
+    await loadLeaderboardTemplates();
+    document.getElementById("lbTemplateSelect").value = name;
+    setStatus("lbTemplateStatus", `"${name}" kaydedildi.`, "success");
+  } catch (err) {
+    setStatus("lbTemplateStatus", err.message, "error");
+  }
+}
+
+async function deleteLeaderboardTemplate() {
+  const select = document.getElementById("lbTemplateSelect");
+  const name = select.value;
+  if (!name) {
+    setStatus("lbTemplateStatus", "Önce silinecek bir şablon seç.", "error");
+    return;
+  }
+  if (!confirm(`"${name}" şablonunu silmek istediğine emin misin?`)) return;
+  try {
+    const res = await fetch("/api/leaderboard/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", name }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Hata (HTTP ${res.status})`);
+    await loadLeaderboardTemplates();
+    setStatus("lbTemplateStatus", `"${name}" silindi.`, "success");
+  } catch (err) {
+    setStatus("lbTemplateStatus", err.message, "error");
+  }
+}
+
+document.getElementById("lbTemplateApply").addEventListener("click", applyLeaderboardTemplate);
+document.getElementById("lbTemplateSave").addEventListener("click", saveLeaderboardTemplate);
+document.getElementById("lbTemplateDelete").addEventListener("click", deleteLeaderboardTemplate);
+
 async function selectSymbol(symbol) {
   selectedSymbol = symbol;
   document.querySelectorAll(".signal-card").forEach(el => {
@@ -929,6 +1030,7 @@ loadStrategies();
 refreshPairChips();
 renderChecklistSummary();
 refreshSystem();
+loadLeaderboardTemplates();
 setupTabs();
 connectStream();
 // Bu ikisi artık ANA güncelleme kanalı DEĞİL, sadece bir güvenlik ağı —

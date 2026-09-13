@@ -172,6 +172,16 @@ Dashboard artık şunları da gösterir:
   daha hızlı/az gereksiz istekle tarayıcıya yansıtıyor. Bağlantı koparsa
   tarayıcı kendiliğinden yeniden bağlanır; 60sn'lik düşük frekanslı bir
   arka plan yenilemesi de güvenlik ağı olarak kalıyor.
+- **Karşılaştırma (Leaderboard)**: birden fazla coin × strateji
+  kombinasyonunu tek seferde çalıştırıp ortalama getiriye göre sıralı
+  gösterir (`POST /api/backtest/batch`) — her strateji kendi varsayılan
+  parametreleriyle çalışır, canlı config'i etkilemez. **Şablonlar (Faz
+  18)**: sık kullandığın bir coin/strateji/mum sayısı/dönem sayısı
+  kombinasyonunu isimle kaydedip (`POST /api/leaderboard/templates`)
+  sonra tek tıkla forma geri yükleyebilirsin — aynı isimle tekrar
+  kaydetmek üzerine yazar (upsert), yeni bir kayıt açmaz. Bu şablonlar
+  sadece bir dashboard kısayolu; botun canlı davranışını (`strategy`/
+  `pair_strategies`) ETKİLEMEZ.
 
 ## 4. Telegram bildirimleri
 
@@ -241,6 +251,24 @@ döndürülüyor (`max-size: 10m`, `max-file: 3`).
 3. `omnitrade/strategies/__init__.py`'daki `STRATEGIES` sözlüğüne ekle
 4. `config/config.yaml`'da `strategy: <SinifAdi>` yap
 5. Önce `backtest`, sonra `dry-run` ile test et
+
+### Kayıtlı stratejiler (varsayılan olarak gelenler)
+
+| Strateji | Yaklaşım | Kullandığı kolonlar |
+| :-- | :-- | :-- |
+| `RsiStrategy` | Mean-reversion (aşırı satım/alım eşiği) | `close` |
+| `MacdStrategy` | Trend-takip (crossover) | `close` |
+| `BollingerStrategy` | Mean-reversion (bandın dışına çıkış) | `close` |
+| `StochasticStrategy` (Faz 18) | Mean-reversion — kapanışın son N mumun high-low aralığındaki konumu | `high`, `low`, `close` |
+| `DonchianStrategy` (Faz 18) | Trend-takip/breakout (Turtle Trading çekirdeği) | `high`, `low`, `close` |
+
+Stochastic ve Donchian, `high`/`low` kolonlarını da kullanan ilk
+stratejiler (öncekiler sadece `close`'a bakıyordu) — fitilleri (wick)
+görmezden gelmeyen bir sinyal üretirler. Donchian, Bollinger'ın TAM
+TERSİ bir felsefeyle çalışır: Bollinger bandın dışına çıkışı "geri
+dönecek" diye okurken, Donchian aynı kırılımı "yeni bir trend
+başlıyor" diye okur — ikisini aynı coin'de yan yana backtest etmek
+(bkz. yukarıdaki Karşılaştırma/Leaderboard paneli) özellikle öğretici.
 
 ### Coin başına farklı strateji/parametre (`pair_strategies`)
 

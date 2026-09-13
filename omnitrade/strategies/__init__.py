@@ -6,6 +6,8 @@ from omnitrade.strategies.base import Action, Signal, Strategy
 from omnitrade.strategies.rsi_strategy import RsiStrategy
 from omnitrade.strategies.macd_strategy import MacdStrategy
 from omnitrade.strategies.bollinger_strategy import BollingerStrategy
+from omnitrade.strategies.stochastic_strategy import StochasticStrategy
+from omnitrade.strategies.donchian_strategy import DonchianStrategy
 
 # Yeni strateji eklediğinde buraya da ekle — config.yaml'daki "strategy"
 # adı burada aranıyor. Dashboard'daki "Strateji Test Et" paneli de bu
@@ -16,6 +18,10 @@ STRATEGIES = {
     "RsiStrategy": RsiStrategy,
     "MacdStrategy": MacdStrategy,
     "BollingerStrategy": BollingerStrategy,
+    # Faz 18: high/low kolonlarını kullanan ilk iki strateji (öncekiler
+    # sadece close'a bakıyordu) — bkz. her dosyanın kendi docstring'i.
+    "StochasticStrategy": StochasticStrategy,
+    "DonchianStrategy": DonchianStrategy,
 }
 
 
@@ -50,5 +56,6 @@ def list_strategies() -> list[dict]:
 
 __all__ = [
     "Action", "Signal", "Strategy", "RsiStrategy", "MacdStrategy",
-    "BollingerStrategy", "STRATEGIES", "get_strategy", "list_strategies",
+    "BollingerStrategy", "StochasticStrategy", "DonchianStrategy",
+    "STRATEGIES", "get_strategy", "list_strategies",
 ]

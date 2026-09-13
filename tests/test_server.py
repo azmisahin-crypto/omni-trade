@@ -108,7 +108,10 @@ class TestExistingGetEndpoints(ServerTestBase):
     def test_strategies_endpoint_lists_registered_strategies_with_param_schema(self):
         strategies = self._get_json("/api/strategies")
         names = {s["name"] for s in strategies}
-        self.assertEqual(names, {"RsiStrategy", "MacdStrategy", "BollingerStrategy"})
+        self.assertEqual(
+            names,
+            {"RsiStrategy", "MacdStrategy", "BollingerStrategy", "StochasticStrategy", "DonchianStrategy"},
+        )
         rsi = next(s for s in strategies if s["name"] == "RsiStrategy")
         param_names = {p["name"] for p in rsi["params"]}
         self.assertEqual(param_names, {"period", "oversold", "overbought"})
@@ -589,6 +592,86 @@ class TestDiffFingerprint(unittest.TestCase):
         old = {"trades": None, "equity": None, "signals": None, "system": None, "heartbeat": None}
         new = dict(old, trades=1)
         self.assertEqual(_diff_fingerprint(old, new), ["trades"])
+
+
+class TestLeaderboardTemplatesEndpoint(ServerTestBase):
+    """Faz 18: /api/leaderboard/templates — kaydet (upsert)/listele/sil."""
+
+    def test_empty_by_default(self):
+        self.assertEqual(self._get_json("/api/leaderboard/templates"), [])
+
+    def test_save_then_list_returns_it(self):
+        status, body = self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "Ana coinler",
+            "symbols": ["BTC/USDT", "ETH/USDT"], "strategies": ["RsiStrategy"],
+            "candle_limit": 1000, "walk_forward": 4,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["name"], "Ana coinler")
+        templates = self._get_json("/api/leaderboard/templates")
+        self.assertEqual(len(templates), 1)
+        self.assertEqual(templates[0]["symbols"], ["BTC/USDT", "ETH/USDT"])
+
+    def test_save_clamps_out_of_range_limits_instead_of_rejecting(self):
+        status, body = self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "Aşırı", "symbols": ["BTC/USDT"],
+            "strategies": ["RsiStrategy"], "candle_limit": 999999, "walk_forward": 999,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["candle_limit"], 1500)
+        self.assertEqual(body["walk_forward"], 12)
+
+    def test_save_missing_name_is_400(self):
+        status, body = self._post_json("/api/leaderboard/templates", {
+            "action": "save", "symbols": ["BTC/USDT"], "strategies": ["RsiStrategy"],
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_save_empty_symbols_is_400(self):
+        status, body = self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "x", "symbols": [], "strategies": ["RsiStrategy"],
+        })
+        self.assertEqual(status, 400)
+
+    def test_save_unknown_strategy_is_400(self):
+        status, body = self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "x", "symbols": ["BTC/USDT"], "strategies": ["NopeStrategy"],
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+
+    def test_invalid_action_is_400(self):
+        status, body = self._post_json("/api/leaderboard/templates", {"action": "update", "name": "x"})
+        self.assertEqual(status, 400)
+
+    def test_delete_existing_template(self):
+        self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "Silinecek", "symbols": ["BTC/USDT"],
+            "strategies": ["RsiStrategy"],
+        })
+        status, body = self._post_json("/api/leaderboard/templates", {"action": "delete", "name": "Silinecek"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["deleted"])
+        self.assertEqual(self._get_json("/api/leaderboard/templates"), [])
+
+    def test_delete_nonexistent_template_is_404(self):
+        status, body = self._post_json("/api/leaderboard/templates", {"action": "delete", "name": "yok"})
+        self.assertEqual(status, 404)
+        self.assertIn("error", body)
+
+    def test_saving_same_name_again_updates(self):
+        self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "Ana coinler", "symbols": ["BTC/USDT"],
+            "strategies": ["RsiStrategy"], "candle_limit": 500, "walk_forward": 2,
+        })
+        self._post_json("/api/leaderboard/templates", {
+            "action": "save", "name": "Ana coinler", "symbols": ["BTC/USDT", "SOL/USDT"],
+            "strategies": ["MacdStrategy"], "candle_limit": 800, "walk_forward": 3,
+        })
+        templates = self._get_json("/api/leaderboard/templates")
+        self.assertEqual(len(templates), 1)
+        self.assertEqual(templates[0]["symbols"], ["BTC/USDT", "SOL/USDT"])
 
 
 class TestLiveModeEndpointWithAuthEnabled(unittest.TestCase):

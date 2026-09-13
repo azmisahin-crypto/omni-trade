@@ -359,6 +359,17 @@
             </label>
             <button id="lbRun" type="button">Karşılaştır</button>
           </div>
+          <div class="bt-apply-row" id="lbTemplateRow">
+            <label style="display:flex; flex-direction:column; gap:4px; font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em;">
+              Kayıtlı şablonlar
+              <select id="lbTemplateSelect" style="width:220px;"><option value="">— seç —</option></select>
+            </label>
+            <button id="lbTemplateApply" type="button" class="secondary">Uygula</button>
+            <button id="lbTemplateDelete" type="button" class="secondary">Sil</button>
+            <input id="lbTemplateName" type="text" placeholder="yeni şablon adı" style="width:180px;" />
+            <button id="lbTemplateSave" type="button">Bu seçimi şablon olarak kaydet</button>
+          </div>
+          <div id="lbTemplateStatus" class="bt-status"></div>
           <div id="lbStatus" class="bt-status"></div>
           <div id="lbResults"></div>
         </div>

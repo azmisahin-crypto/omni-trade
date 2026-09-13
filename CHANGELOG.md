@@ -1015,6 +1015,91 @@ web↔SQLite arasında (yerel disk, ucuz) bir poll var artık.
   için yeterli ve stdlib `http.server` üzerinde WebSocket handshake/
   frame'lemeyi elle yazmaktan çok daha az kod/risk taşıyor.
 
+## Faz 18 — Yeni Stratejiler + Karşılaştırmalı Şablonlar ✅ Tamamlandı
+
+**Neden:** `PLAN.md`'de Faz 18 iki bağımsız parça olarak planlıydı: (1)
+tek strateji ailesinin (RSI/MACD/Bollinger — hepsi klasik teknik
+gösterge, hepsi sadece `close` kolonunu kullanıyor) ötesine geçmek
+(`AUDIT_REPORT.md` §7 madde 3'te not düşülen, bilinçli kapsam dışı
+bırakılmış ama işaretlenmiş bir eksik) ve (2) Faz 9'daki leaderboard
+panelinde her seferinde aynı coin/strateji kombinasyonunu elle yeniden
+seçme sürtünmesini azaltmak.
+
+**Değişenler:**
+
+- **`omnitrade/strategies/stochastic_strategy.py` (yeni)**:
+  `StochasticStrategy` — RSI'ye benzer eşik-tabanlı mean-reversion
+  (aşırı satım → BUY, aşırı alım → SELL) ama TAMAMEN farklı formülle:
+  kapanışın son N mumun high-low ARALIĞI içindeki KONUMU (%K/%D).
+  Kenar durum (son N mumda hiç hareket yoksa, `highest_high ==
+  lowest_low`) RSI'deki `avg_gain=avg_loss=0` ele alışıyla aynı
+  gerekçeyle nötr (50) sabitlendi — yanlışlıkla 0/NaN üretmesin diye.
+- **`omnitrade/strategies/donchian_strategy.py` (yeni)**:
+  `DonchianStrategy` — klasik "Turtle Trading" breakout: kapanış son N
+  mumun (kendisi HARİÇ, `shift(1)` ile) en yükseğini kırarsa BUY, en
+  düşüğünü kırarsa SELL. Bilinçli olarak `BollingerStrategy`'nin TAM
+  ZITTI bir felsefe seçildi — Bollinger aynı "bandın dışına çıkış"
+  olayını mean-reversion (geri dönecek) diye okurken, Donchian
+  breakout/momentum (yeni trend başlıyor) diye okuyor; ikisini aynı
+  coin'de yan yana backtest etmek (Karşılaştırma paneli) özellikle
+  öğretici.
+- **`omnitrade/strategies/__init__.py`**: her iki strateji `STRATEGIES`
+  sözlüğüne eklendi. Faz 8'in introspection mekanizması sayesinde
+  dashboard'daki strateji dropdown'ı, parametre formu VE leaderboard
+  coin/strateji seçimi frontend'e HİÇBİR dokunuş gerekmeden otomatik
+  güncellendi.
+- **`omnitrade/storage.py`**: yeni `leaderboard_templates` tablosu +
+  `save_leaderboard_template()` (isimle upsert — aynı isim varsa
+  üzerine yazar, yeni satır AÇMAZ; `created_ts` sadece ilk kayıtta set
+  edilir) + `get_leaderboard_templates()` (isme göre alfabetik) +
+  `delete_leaderboard_template()` (silinen satır var mıydı diye `bool`
+  döner). `symbols`/`strategies` JSON dizi olarak tek sütunda tutulur —
+  bu sadece bir UI kısayolu, ayrı bir ilişkisel tabloya gerek yok.
+- **`omnitrade/web/server.py`**:
+  - `GET /api/leaderboard/templates` — kayıtlı şablonları listeler.
+  - `POST /api/leaderboard/templates` — `_handle_config_pairs` ile AYNI
+    desende, gövdedeki `action` alanına göre dallanır (`save`/`delete`;
+    stdlib `http.server` kurulumunda DELETE metodu implemente
+    edilmediği için silme de POST ile yapılıyor). `save`: `name`
+    zorunlu, `symbols`/`strategies` boş olmayan liste olmalı,
+    `strategies` içindeki her isim `get_strategy()` ile doğrulanır
+    (bilinmeyen strateji → 400). `candle_limit`/`walk_forward`,
+    `/api/backtest/batch` ile AYNI sınırlarla (`[50,1500]`/`[1,12]`)
+    REDDETMEK yerine SESSİZCE kırpılır — kaydedilen bir şablon daha
+    sonra "Uygula"ya basılıp çalıştırıldığında batch endpoint'inin
+    kendi sınırına takılıp sürpriz bir hata vermesin diye.
+  - Bu uçlar `pair_strategies`'in aksine botun canlı davranışını
+    ETKİLEMİYOR (sadece dashboard formunu ön dolduruyor) — bu yüzden
+    Faz 16/17'deki gibi bir auth/onay/audit-log zorunluluğu YOK, diğer
+    düşük riskli GET/POST'larla aynı `_require_auth()` yolundan geçiyor.
+- **`omnitrade/web/static/index.html` + `app.js`**: Karşılaştırma
+  panelinde yeni bir şablon satırı — kayıtlı şablonları listeleyen
+  dropdown, "Uygula" (formu doldurur, ÇALIŞTIRMAZ — "Karşılaştır"a
+  basmak hâlâ ayrı bir adım), "Sil" (`confirm()` ile onay ister) ve
+  "Bu seçimi şablon olarak kaydet" (isim + o an seçili coin/strateji/
+  mum sayısı/dönem sayısını kaydeder). Sayfa açılışında
+  `loadLeaderboardTemplates()` şablon listesini çeker.
+- **Testler**: `TestStochasticStrategy` (5), `TestDonchianStrategy`
+  (4), `TestLeaderboardTemplates` (storage, 5),
+  `TestLeaderboardTemplatesEndpoint` (server, 9) + mevcut
+  `test_strategies_endpoint_lists_registered_strategies_with_param_schema`
+  testi yeni strateji isimlerini de kapsayacak şekilde güncellendi.
+  167 → 191 test, hepsi yeşil
+  (`PYTHONPATH=. python -m unittest discover -s tests`, ~38s). Ayrıca
+  gerçek bir `ThreadingHTTPServer`e karşı elle uçtan uca doğrulandı
+  (save/list/delete döngüsü, `candle_limit`/`walk_forward` kırpma).
+
+**Kasıtlı olarak yapılMAYAN:**
+- Şablonları dashboard'daki SSE push kanalına (Faz 17) dahil etmek —
+  şablon değişiklikleri aynı oturumdaki bir kullanıcı eylemiyle zaten
+  anında yansıyor (`loadLeaderboardTemplates()` her save/delete
+  sonrası çağrılıyor), başka bir sekme/kullanıcının anlık haberdar
+  olması gereken bir senaryo değil; kapsam bilinçli olarak dar tutuldu.
+- Hyperparameter arama / grid-search (Freqtrade'in Hyperopt'una kıyasla
+  hâlâ bir eksik, `AUDIT_REPORT.md` §7 madde 5'te not düşülmüştü) —
+  bu faz sadece YENİ STRATEJİ EKLEME ve KARŞILAŞTIRMA KISAYOLU
+  kapsamındaydı, otomatik parametre optimizasyonu ayrı bir faz.
+
 ## Nasıl devam edilir
 
 1. `git log --oneline` ile commit geçmişini oku — her commit bir fazı

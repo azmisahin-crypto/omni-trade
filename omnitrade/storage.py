@@ -2,6 +2,7 @@
 buraya yazılır. Web dashboard bu tablolardan okur."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -63,6 +64,25 @@ CREATE TABLE IF NOT EXISTS mode_audit_log (
     new_dry_run INTEGER NOT NULL,
     old_live_trading_confirmed INTEGER NOT NULL,
     new_live_trading_confirmed INTEGER NOT NULL
+);
+
+-- Faz 18: "Karşılaştırma (Leaderboard)" panelindeki coin/strateji/mum
+-- sayısı/walk-forward seçimini isimlendirip kaydetmeye yarar — her
+-- seferinde aynı kombinasyonu elle yeniden seçmek yerine tek tıkla
+-- tekrar çalıştırılabilsin diye. `symbols`/`strategies` JSON dizi olarak
+-- tutulur (ne kadar coin/strateji seçilirse seçilsin tek sütun yeterli,
+-- ayrı bir ilişkisel tabloya gerek yok — bu sadece bir UI kısayolu,
+-- sorgulanabilir/analiz edilecek bir veri değil). `name` benzersiz: aynı
+-- isimle kaydetmek var olanı GÜNCELLER (upsert), yeni bir satır açmaz.
+CREATE TABLE IF NOT EXISTS leaderboard_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    symbols TEXT NOT NULL,          -- JSON dizi, örn. ["BTC/USDT","ETH/USDT"]
+    strategies TEXT NOT NULL,       -- JSON dizi, örn. ["RsiStrategy","MacdStrategy"]
+    candle_limit INTEGER NOT NULL,
+    walk_forward INTEGER NOT NULL,
+    created_ts REAL NOT NULL,
+    updated_ts REAL NOT NULL
 );
 """
 
@@ -219,6 +239,55 @@ class Storage:
             "system": audit_id,
             "heartbeat": heartbeat_ts,
         }
+
+    def save_leaderboard_template(
+        self, name: str, symbols: list[str], strategies: list[str],
+        candle_limit: int, walk_forward: int,
+    ) -> dict:
+        """Faz 18: leaderboard seçimini isimle kaydeder/günceller (upsert —
+        aynı `name` varsa üzerine yazar, yeni satır AÇMAZ). `updated_ts`
+        her kayıtta yenilenir, `created_ts` SADECE ilk kayıtta set edilir
+        (ON CONFLICT kolunda `excluded.created_ts` KULLANILMIYOR — mevcut
+        satırın `created_ts`'i olduğu gibi korunur)."""
+        now = time.time()
+        symbols_json = json.dumps(symbols)
+        strategies_json = json.dumps(strategies)
+        self.conn.execute(
+            "INSERT INTO leaderboard_templates "
+            "(name, symbols, strategies, candle_limit, walk_forward, created_ts, updated_ts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET "
+            "symbols=excluded.symbols, strategies=excluded.strategies, "
+            "candle_limit=excluded.candle_limit, walk_forward=excluded.walk_forward, "
+            "updated_ts=excluded.updated_ts",
+            (name, symbols_json, strategies_json, candle_limit, walk_forward, now, now),
+        )
+        self.conn.commit()
+        return {
+            "name": name, "symbols": symbols, "strategies": strategies,
+            "candle_limit": candle_limit, "walk_forward": walk_forward,
+        }
+
+    def get_leaderboard_templates(self) -> list[dict]:
+        """İsme göre alfabetik sıralı — dashboard'daki şablon listesi
+        panelini besler."""
+        cur = self.conn.execute(
+            "SELECT name, symbols, strategies, candle_limit, walk_forward, updated_ts "
+            "FROM leaderboard_templates ORDER BY name ASC"
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        for row in rows:
+            row["symbols"] = json.loads(row["symbols"])
+            row["strategies"] = json.loads(row["strategies"])
+        return rows
+
+    def delete_leaderboard_template(self, name: str) -> bool:
+        """Silinen bir satır varsa True, isim zaten yoksa False döner —
+        çağıran taraf (server.py) bunu 404 kararı için kullanır."""
+        cur = self.conn.execute("DELETE FROM leaderboard_templates WHERE name = ?", (name,))
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def beat(self) -> None:
         """Her başarılı döngü sonunda çağrılır — dışarıdan (healthcheck.py)
