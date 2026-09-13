@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS signals (
     action TEXT NOT NULL,       -- buy / sell / hold
     price REAL NOT NULL,
     reason TEXT,
-    executed INTEGER NOT NULL DEFAULT 0
+    executed INTEGER NOT NULL DEFAULT 0,
+    strategy TEXT NOT NULL DEFAULT ''   -- bu sinyali üreten strateji (Storage._migrate_add_signal_strategy_column eski DB'ler için ekler)
 );
 CREATE INDEX IF NOT EXISTS idx_signals_symbol_ts ON signals (symbol, ts);
 
@@ -98,6 +99,19 @@ class Storage:
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self._migrate_add_signal_strategy_column()
+
+    def _migrate_add_signal_strategy_column(self) -> None:
+        """FIX: dashboard'da 'hangi sinyali hangi strateji üretti?' hiç
+        görünmüyordu çünkü `signals` tablosunda strateji bilgisi hiç
+        tutulmuyordu (sadece action/price/reason vardı). CREATE TABLE IF NOT
+        EXISTS zaten var olan eski veritabanlarını değiştirmediği için bu
+        kolonu burada, var olan DB'lere zarar vermeden (ALTER TABLE ADD
+        COLUMN) ekliyoruz; kolon zaten varsa sessizce geçilir."""
+        cols = [row[1] for row in self.conn.execute("PRAGMA table_info(signals)").fetchall()]
+        if "strategy" not in cols:
+            self.conn.execute("ALTER TABLE signals ADD COLUMN strategy TEXT NOT NULL DEFAULT ''")
+            self.conn.commit()
 
     def log_trade(
         self, symbol: str, action: str, price: float, qty: float,
@@ -134,15 +148,17 @@ class Storage:
 
     def log_signal(
         self, symbol: str, action: str, price: float,
-        reason: str = "", executed: bool = False,
+        reason: str = "", executed: bool = False, strategy: str = "",
     ) -> None:
         """Her döngüde ÜRETİLEN her sinyali kaydeder (hold dahil, pozisyon
         olsun olmasın) — trade gerçekleşmese de coinin son durumu görülebilsin
-        diye. Bkz. tablo yorumu (SCHEMA)."""
+        diye. Bkz. tablo yorumu (SCHEMA). `strategy`: bu sinyali üreten
+        stratejinin adı (FIX — önceden hiç saklanmıyordu, dashboard'da
+        'hangi strateji hangi sinyali verdi' hiç görünmüyordu)."""
         self.conn.execute(
-            "INSERT INTO signals (ts, symbol, action, price, reason, executed) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (time.time(), symbol, action, price, reason, int(executed)),
+            "INSERT INTO signals (ts, symbol, action, price, reason, executed, strategy) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (time.time(), symbol, action, price, reason, int(executed), strategy),
         )
         self.conn.commit()
 
@@ -150,7 +166,7 @@ class Storage:
         """Her sembol için en son üretilen sinyal — coin listesi panelini
         besler (bkz. web dashboard)."""
         cur = self.conn.execute(
-            "SELECT s.ts, s.symbol, s.action, s.price, s.reason, s.executed "
+            "SELECT s.ts, s.symbol, s.action, s.price, s.reason, s.executed, s.strategy "
             "FROM signals s "
             "INNER JOIN (SELECT symbol, MAX(ts) AS max_ts FROM signals GROUP BY symbol) latest "
             "ON s.symbol = latest.symbol AND s.ts = latest.max_ts "
@@ -164,13 +180,13 @@ class Storage:
         Sonuç zaman artan sırada döner (grafik çizimi için uygun)."""
         if symbol:
             cur = self.conn.execute(
-                "SELECT ts, symbol, action, price, reason, executed FROM signals "
+                "SELECT ts, symbol, action, price, reason, executed, strategy FROM signals "
                 "WHERE symbol = ? ORDER BY ts DESC LIMIT ?",
                 (symbol, limit),
             )
         else:
             cur = self.conn.execute(
-                "SELECT ts, symbol, action, price, reason, executed FROM signals "
+                "SELECT ts, symbol, action, price, reason, executed, strategy FROM signals "
                 "ORDER BY ts DESC LIMIT ?",
                 (limit,),
             )

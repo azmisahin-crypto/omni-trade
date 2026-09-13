@@ -185,6 +185,11 @@ class TestRunOnceOnlyNotifiesOnRealTrade(unittest.TestCase):
             engine.run_once()
 
         mock_alert.assert_called_once()
+        # Regresyon testi: Telegram "Miktar: 0.000000" bugu — trade_alert
+        # önceden qty parametresini HER ZAMAN sabit 0.0 alıyordu (bkz.
+        # portfolio.apply_signal'in artık qty de döndürmesi / engine.py fix).
+        _, _, _, sent_qty, _ = mock_alert.call_args.args
+        self.assertGreater(sent_qty, 0.0)
 
 
 class TestConfigHotReload(unittest.TestCase):
@@ -316,6 +321,8 @@ def _flat_df() -> pd.DataFrame:
 
 
 class _StubStrategy:
+    name = "StubStrategy"
+
     def __init__(self, action):
         from omnitrade.strategies.base import Signal
         self._action = action

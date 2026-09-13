@@ -195,11 +195,23 @@ async function refreshSignals() {
     const div = document.createElement("div");
     div.className = "signal-card" + (s.symbol === selectedSymbol ? " selected" : "");
     div.tabIndex = 0;
+    // FIX: sinyal ile gerçekleşen işlem farkı görünmüyordu (ör. pozisyon
+    // yokken üretilen bir "sell" hiçbir işlem yapmaz ama kart aynı görünürdü)
+    // ve hangi stratejinin sinyal verdiği hiç yazmıyordu. İkisi de artık
+    // backend'den geliyor (bkz. storage.py strategy kolonu / executed alanı).
+    const strategyLabel = s.strategy ? `<div class="strategy">${s.strategy}</div>` : "";
+    const executedLabel = (s.action !== "hold")
+      ? (s.executed
+          ? `<div class="exec-tag exec-yes">işlem yapıldı</div>`
+          : `<div class="exec-tag exec-no">sadece sinyal (işlem yok)</div>`)
+      : "";
     div.innerHTML = `
       <div class="symbol">${s.symbol}</div>
+      ${strategyLabel}
       <div class="badge ${s.action}">${actionLabel(s.action)}</div>
       <div class="price">${s.price.toFixed(4)}</div>
       <div class="reason">${s.reason ?? ""}</div>
+      ${executedLabel}
       <div class="ago">${timeAgo(s.ts)}</div>`;
     div.addEventListener("click", () => selectSymbol(s.symbol));
     div.addEventListener("keydown", (e) => {
@@ -718,13 +730,28 @@ async function selectSymbol(symbol) {
 
   const detail = document.getElementById("signalDetail");
   detail.classList.add("visible");
-  document.getElementById("signalDetailTitle").textContent = `${symbol} — fiyat & sinyaller`;
 
   const history = await fetchJSON(`/api/signals/history?symbol=${encodeURIComponent(symbol)}&limit=300`);
-  const labels = history.map(h => new Date(h.ts * 1000).toLocaleString());
+  // FIX: grafik başlığı hangi stratejinin bu sinyalleri ürettiğini hiç
+  // söylemiyordu (kullanıcı "strateji değiştirsem ne olurdu göremiyorum"
+  // diyordu) — en azından şu an AKTİF olanı burada gösteriyoruz. Coin
+  // başına aynı anda tek strateji çalıştığı için (bkz. config pair_strategies)
+  // geçmiş sinyallerin çoğu zaten bu stratejiye ait olacaktır; strateji
+  // değiştirilmiş geçmiş noktalar ayrı renkte işaretlenir (aşağıda).
+  const activeStrategy = history.length ? history[history.length - 1].strategy : "";
+  document.getElementById("signalDetailTitle").textContent =
+    `${symbol} — fiyat & sinyaller${activeStrategy ? ` (${activeStrategy})` : ""}`;
   const prices = history.map(h => h.price);
-  const buyPoints = history.map(h => (h.action === "buy" ? h.price : null));
-  const sellPoints = history.map(h => (h.action === "sell" ? h.price : null));
+  // Gerçekten pozisyon açan/kapatan (executed=1) sinyaller dolu üçgen/kare;
+  // stratejinin ürettiği ama hiçbir işleme yol açmadığı (ör. pozisyon
+  // yokken gelen sell) ham sinyaller SOLUK noktalarla ayrı gösterilir —
+  // önceden ikisi aynı görünüyordu, bu da "hep sat sinyali var ama işlem
+  // yok" karışıklığına yol açıyordu.
+  const buyPoints = history.map(h => (h.action === "buy" && h.executed ? h.price : null));
+  const sellPoints = history.map(h => (h.action === "sell" && h.executed ? h.price : null));
+  const buyOnlyPoints = history.map(h => (h.action === "buy" && !h.executed ? h.price : null));
+  const sellOnlyPoints = history.map(h => (h.action === "sell" && !h.executed ? h.price : null));
+  const labels = history.map(h => new Date(h.ts * 1000).toLocaleString());
 
   // Aynı coin için tekrar çağrıldıysa (10sn'lik poll döngüsü, kullanıcı
   // coin değiştirmedi) grafiği yok edip yeniden yaratmak yerine verisini
@@ -735,6 +762,8 @@ async function selectSymbol(symbol) {
     signalChart.data.datasets[0].data = prices;
     signalChart.data.datasets[1].data = buyPoints;
     signalChart.data.datasets[2].data = sellPoints;
+    signalChart.data.datasets[3].data = buyOnlyPoints;
+    signalChart.data.datasets[4].data = sellOnlyPoints;
     signalChart.update();
     return;
   }
@@ -742,8 +771,10 @@ async function selectSymbol(symbol) {
   const ctx = document.getElementById("signalChart").getContext("2d");
   const datasets = [
     { label: "Fiyat", data: prices, borderColor: "#60a5fa", tension: 0.2, pointRadius: 0 },
-    { label: "LONG (AL)", data: buyPoints, borderColor: "#4ade80", backgroundColor: "#4ade80", showLine: false, pointRadius: 6, pointStyle: "triangle" },
-    { label: "SHORT (SAT)", data: sellPoints, borderColor: "#f87171", backgroundColor: "#f87171", showLine: false, pointRadius: 6, pointStyle: "rectRot" },
+    { label: "LONG (işlem açıldı)", data: buyPoints, borderColor: "#4ade80", backgroundColor: "#4ade80", showLine: false, pointRadius: 7, pointStyle: "triangle" },
+    { label: "SHORT (işlem kapandı)", data: sellPoints, borderColor: "#f87171", backgroundColor: "#f87171", showLine: false, pointRadius: 7, pointStyle: "rectRot" },
+    { label: "AL sinyali (işlem yok)", data: buyOnlyPoints, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.25)", showLine: false, pointRadius: 4, pointStyle: "triangle" },
+    { label: "SAT sinyali (işlem yok)", data: sellOnlyPoints, borderColor: "#f87171", backgroundColor: "rgba(248,113,113,0.25)", showLine: false, pointRadius: 4, pointStyle: "rectRot" },
   ];
 
   if (signalChart) signalChart.destroy();

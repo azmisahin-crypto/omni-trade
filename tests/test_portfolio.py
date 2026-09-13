@@ -155,32 +155,37 @@ class TestApplySignalReturnValue(unittest.TestCase):
 
     def test_sell_without_open_position_returns_false_and_does_not_log(self):
         p = self._make_portfolio()
-        executed = p.apply_signal(Signal(Action.SELL, "BTC/USDT", reason="RSI>70"), price=100.0)
+        executed, qty = p.apply_signal(Signal(Action.SELL, "BTC/USDT", reason="RSI>70"), price=100.0)
         self.assertFalse(executed)
+        self.assertEqual(qty, 0.0)
         self.assertEqual(p.storage.get_trades(limit=10), [])
 
     def test_successful_buy_returns_true(self):
         p = self._make_portfolio()
-        executed = p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        executed, qty = p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
         self.assertTrue(executed)
+        self.assertGreater(qty, 0.0)  # FIX: qty artık gerçek miktarı taşıyor (Telegram "Miktar: 0" bugu)
 
     def test_successful_sell_returns_true(self):
         p = self._make_portfolio()
         p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
-        executed = p.apply_signal(Signal(Action.SELL, "BTC/USDT"), price=110.0)
+        executed, qty = p.apply_signal(Signal(Action.SELL, "BTC/USDT"), price=110.0)
         self.assertTrue(executed)
+        self.assertGreater(qty, 0.0)
 
     def test_buy_when_already_holding_returns_false(self):
         p = self._make_portfolio()
         p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
-        executed = p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=105.0)
+        executed, qty = p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=105.0)
         self.assertFalse(executed)
+        self.assertEqual(qty, 0.0)
 
     def test_blocked_buy_by_risk_engine_returns_false(self):
         risk = RiskConfig(max_position_pct=0.5, max_open_positions=0)
         p = Portfolio(Storage(":memory:"), 1000.0, risk_config=risk)
-        executed = p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
+        executed, qty = p.apply_signal(Signal(Action.BUY, "BTC/USDT"), price=100.0)
         self.assertFalse(executed)
+        self.assertEqual(qty, 0.0)
 
 
 if __name__ == "__main__":
